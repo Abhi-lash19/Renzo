@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual Env (good to ignore early)
+venv/
+.env
+
+# Logs
+logs/
+*.log
+
+# Data
+data/jobs.db
+data/resume.txt
+
+# Output
+output/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
