@@ -1,6 +1,10 @@
 from datetime import datetime
+from typing import List
+
 
 class Job:
+    """Represents a job posting."""
+
     def __init__(
         self,
         job_id: str,
@@ -24,11 +28,11 @@ class Job:
         self.fetched_at = fetched_at
 
         # computed later
-        self.skills = []
-        self.score = 0.0
-        self.is_remote = False
-        self.is_startup = False
-        self.missing_skills = []
+        self.skills: List[str] = []
+        self.score: float = 0.0
+        self.is_remote: bool = False
+        self.is_startup: bool = False
+        self.missing_skills: List[str] = []
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<Job {self.title} at {self.company}>"

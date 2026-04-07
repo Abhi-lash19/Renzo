@@ -1,14 +1,19 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+from typing import List
 from fetchers.indeed_rss import IndeedRSSFetcher
 from fetchers.adzuna_api import AdzunaFetcher
 from fetchers.remotive_api import RemotiveFetcher
+from pipeline.models import Job
 from utils.logger import get_logger
+from config.settings import settings
 from storage.db import init_db
 
 logger = get_logger(__name__)
 
 
-def fetch_all_jobs():
+def fetch_all_jobs() -> List[Job]:
+    """Fetch jobs from all sources concurrently with timing and error handling."""
     sources = [
         IndeedRSSFetcher(),
         AdzunaFetcher(),
@@ -17,7 +22,7 @@ def fetch_all_jobs():
 
     all_jobs = []
 
-    with ThreadPoolExecutor(max_workers=len(sources)) as executor:
+    with ThreadPoolExecutor(max_workers=settings.MAX_WORKERS) as executor:
         future_to_source = {
             executor.submit(source.fetch_and_normalize): source.__class__.__name__
             for source in sources
@@ -25,14 +30,17 @@ def fetch_all_jobs():
 
         for future in as_completed(future_to_source):
             source_name = future_to_source[future]
+            start_time = time.time()
 
             try:
                 jobs = future.result()
-                logger.info(f"✅ {source_name}: {len(jobs)} jobs fetched")
+                execution_time = time.time() - start_time
+                logger.info(f"✅ {source_name}: {len(jobs)} jobs fetched in {execution_time:.2f}s")
                 all_jobs.extend(jobs)
 
             except Exception as e:
-                logger.error(f"❌ {source_name} failed: {e}")
+                execution_time = time.time() - start_time
+                logger.error(f"❌ {source_name} failed after {execution_time:.2f}s: {e}")
 
     return all_jobs
 
