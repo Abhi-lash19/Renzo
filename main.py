@@ -5,6 +5,9 @@ from fetchers.indeed_rss import IndeedRSSFetcher
 from fetchers.adzuna_api import AdzunaFetcher
 from fetchers.remotive_api import RemotiveFetcher
 from pipeline.models import Job
+from pipeline.filter import passes_filter
+from pipeline.deduplicate import is_duplicate
+from storage.repository import JobRepository
 from utils.logger import get_logger
 from config.settings import settings
 from storage.db import init_db
@@ -30,9 +33,9 @@ def fetch_all_jobs() -> List[Job]:
 
         for future in as_completed(future_to_source):
             source_name = future_to_source[future]
-            start_time = time.time()
 
             try:
+                start_time = time.time()
                 jobs = future.result()
                 execution_time = time.time() - start_time
                 logger.info(f"✅ {source_name}: {len(jobs)} jobs fetched in {execution_time:.2f}s")
@@ -45,6 +48,52 @@ def fetch_all_jobs() -> List[Job]:
     return all_jobs
 
 
+def process_jobs(jobs: List[Job]) -> None:
+    """Process jobs through the pipeline: filter -> deduplicate -> store."""
+    repository = JobRepository()
+
+    total_fetched = len(jobs)
+    filtered_count = 0
+    duplicate_count = 0
+    stored_count = 0
+
+    logger.info(f"🔄 Processing {total_fetched} jobs through pipeline")
+
+    for job in jobs[:settings.JOB_FETCH_LIMIT]:  # Limit total processing
+        try:
+            # Step 1: Filter
+            if not passes_filter(job):
+                filtered_count += 1
+                continue
+
+            # Step 2: Deduplicate
+            if is_duplicate(job, repository):
+                duplicate_count += 1
+                continue
+
+            # Step 3: Store
+            if repository.insert_job(job):
+                stored_count += 1
+            else:
+                logger.warning(f"Failed to store job: {job.title} at {job.company}")
+
+        except Exception as e:
+            logger.warning(f"Failed to process job {job.job_id}: {e}")
+            continue
+
+    logger.info("📊 Pipeline Summary:")
+    logger.info(f"  Total fetched: {total_fetched}")
+
+    if total_fetched > 0:
+        logger.info(f"  Filtered out: {filtered_count} ({filtered_count/total_fetched:.2%})")
+        logger.info(f"  Duplicates removed: {duplicate_count} ({duplicate_count/total_fetched:.2%})")
+        logger.info(f"  Successfully stored: {stored_count} ({stored_count/total_fetched:.2%})")
+    else:
+        logger.info(f"  Filtered out: {filtered_count}")
+        logger.info(f"  Duplicates removed: {duplicate_count}")
+        logger.info(f"  Successfully stored: {stored_count}")
+
+
 def main():
     logger.info("🚀 Starting Job Intelligence Engine")
 
@@ -52,13 +101,9 @@ def main():
 
     jobs = fetch_all_jobs()
 
-    logger.info(f"📊 Total jobs fetched: {len(jobs)}")
+    process_jobs(jobs)
 
-    logger.info("🔍 Sample jobs:")
-    for job in jobs[:5]:
-        logger.info(f"{job.title} | {job.company} | {job.source}")
-
-    logger.info("🎯 Fetch phase completed")
+    logger.info("🎯 Pipeline completed")
 
 
 if __name__ == "__main__":
