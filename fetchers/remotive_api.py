@@ -15,21 +15,54 @@ class RemotiveFetcher(BaseJobSource):
     URL = "https://remotive.com/api/remote-jobs"
 
     def fetch(self) -> List[Dict[str, Any]]:
-        """Fetch jobs from Remotive API."""
+        """Fetch jobs from Remotive API with fallback."""
+        
+        # Try with configured search keywords first
+        search_term = settings.SEARCH_KEYWORDS.strip() if settings.SEARCH_KEYWORDS else "developer"
+        
+        if not search_term:
+            search_term = "developer"
+        
+        logger.info(f"🔍 Remotive: Fetching with search term='{search_term}'")
+        
         params = {
-            "search": settings.SEARCH_KEYWORDS
+            "search": search_term
         }
 
         response = get_with_retry(self.URL, params=params)
 
         if not response:
+            logger.warning("Remotive: Failed to fetch with configured search term")
             return []
 
-        data = response.json()
-        jobs = data.get("jobs", [])
+        try:
+            data = response.json()
+            jobs = data.get("jobs", [])
 
-        logger.debug(f"Remotive: Fetched {len(jobs)} raw jobs")
-        return jobs
+            logger.info(f"✅ Remotive: Fetched {len(jobs)} jobs with search='{search_term}'")
+            
+            # If we got very few results, try with a broader search
+            if len(jobs) < 5 and search_term != "developer":
+                logger.debug(f"Remotive: Got only {len(jobs)} jobs, trying broader search with 'developer'")
+                
+                fallback_params = {"search": "developer"}
+                fallback_response = get_with_retry(self.URL, params=fallback_params)
+                
+                if fallback_response:
+                    try:
+                        fallback_data = fallback_response.json()
+                        fallback_jobs = fallback_data.get("jobs", [])
+                        logger.info(f"✅ Remotive fallback: Fetched {len(fallback_jobs)} jobs with search='developer'")
+                        jobs.extend(fallback_jobs)
+                    except Exception as e:
+                        logger.warning(f"Remotive: Fallback search failed: {e}")
+            
+            return jobs
+            
+        except Exception as e:
+            logger.error(f"Remotive: Failed to parse response: {e}")
+            logger.debug(f"Raw response: {response.text[:500]}")
+            return []
 
     def normalize(self, raw: Dict[str, Any]) -> Job:
         """Normalize Remotive job data to Job object."""
@@ -37,9 +70,12 @@ class RemotiveFetcher(BaseJobSource):
         publication_date_str = raw.get("publication_date")
         if publication_date_str:
             try:
-                # Assuming ISO format, e.g., "2023-10-01T12:00:00"
+                # Parse ISO format, handling timezone-aware datetimes
                 posted_at = datetime.fromisoformat(publication_date_str)
-            except ValueError:
+                # Convert to naive UTC if timezone-aware
+                if posted_at.tzinfo is not None:
+                    posted_at = posted_at.replace(tzinfo=None)
+            except (ValueError, TypeError):
                 logger.warning(f"Invalid date format for Remotive job {raw.get('id')}: {publication_date_str}")
                 posted_at = datetime.utcnow()
         else:

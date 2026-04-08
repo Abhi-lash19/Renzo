@@ -1,0 +1,69 @@
+# =========================
+# BASIC INFO
+# =========================
+name: Abhilash Kumar Giri
+role: Backend Developer
+experience_level: 0-2 years
+
+# =========================
+# CORE SKILLS (HIGH PRIORITY)
+# =========================
+core_skills:
+python, aws, backend, api, rest, lambda, microservices
+
+# =========================
+# SECONDARY SKILLS
+# =========================
+secondary_skills:
+docker, kubernetes, mysql, graphql, fastapi, node.js, sql, datadog, mulesoft
+
+# =========================
+# CLOUD & DEVOPS
+# =========================
+cloud:
+aws, s3, sqs, sns, api gateway, ec2, ecr, eks, ecs
+
+devops:
+docker, kubernetes, github actions, gitlab ci, terraform
+
+# =========================
+# PROJECT KEYWORDS (VERY IMPORTANT)
+# =========================
+projects:
+monitoring system, ci/cd pipeline, microservices, nlp, face recognition, real-time system, analytics
+
+# =========================
+# EXPERIENCE KEYWORDS
+# =========================
+experience:
+event-driven architecture, system integration, api integration, cloud automation, distributed systems
+
+# =========================
+# JOB PREFERENCES
+# =========================
+preferred_roles:
+backend developer, software engineer, python developer
+
+preferred_keywords:
+backend, api, microservices, cloud, aws
+
+# =========================
+# EXCLUSIONS (FILTER OUT)
+# =========================
+exclude_keywords:
+frontend, react, angular, ui designer, senior, lead, principal
+
+# =========================
+# FLEXIBLE KEYWORDS (OPTIONAL BOOST)
+# =========================
+bonus_keywords:
+startup, early stage, high growth, saas
+
+# =========================
+# LOCATION & MODE
+# =========================
+location:
+india, remote
+
+remote_preferred:
+true

@@ -40,8 +40,16 @@ class JobRepository:
         Returns:
             True if inserted successfully, False otherwise
         """
+        if not job.title or not job.company or not job.url:
+            logger.error(
+                f"Invalid job data, cannot store: title={job.title!r}, company={job.company!r}, url={job.url!r}"
+            )
+            return False
+
+        logger.info(f"💾 Storing job: {job.title}")
+
         query = """
-            INSERT INTO jobs (
+            INSERT OR IGNORE INTO jobs (
                 id, title, company, location, description, url, source,
                 posted_at, fetched_at, score, is_remote, is_startup
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -62,14 +70,25 @@ class JobRepository:
             int(job.is_startup)
         )
 
+        conn = None
         try:
-            return self._execute_with_retry(query, params)
-        except sqlite3.IntegrityError:
-            # Duplicate job ID
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            conn.commit()
+            if cursor.rowcount == 0:
+                logger.info(f"Job already exists, skipping insert: {job.title}")
+                return False
+            return True
+        except sqlite3.IntegrityError as e:
+            logger.error(f"Database integrity error inserting job {job.job_id}: {e}")
             return False
         except sqlite3.Error as e:
             logger.error(f"Failed to insert job {job.job_id}: {e}")
             return False
+        finally:
+            if conn:
+                conn.close()
 
     def insert_hash(self, hash_value: str) -> bool:
         """
@@ -79,19 +98,24 @@ class JobRepository:
             hash_value: SHA-256 hash string
 
         Returns:
-            True if inserted successfully, False otherwise
+            True if inserted successfully or already exists, False otherwise
         """
-
+        query = "INSERT OR IGNORE INTO job_hashes (hash, created_at) VALUES (?, ?)"
         params = (hash_value, datetime.utcnow().isoformat())
 
+        conn = None
         try:
-            return self._execute_with_retry(query, params)
-        except sqlite3.IntegrityError:
-            # Hash already exists → treat as success
-            return True
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            conn.commit()
+            return cursor.rowcount == 1 or self.hash_exists(hash_value)
         except sqlite3.Error as e:
-            logger.error(f"Failed to insert hash {hash_value[:8]}...: {e}")
+            logger.warning(f"Failed to insert hash {hash_value[:8]}...: {e}")
             return False
+        finally:
+            if conn:
+                conn.close()
 
     def hash_exists(self, hash_value: str) -> bool:
         """
@@ -118,6 +142,34 @@ class JobRepository:
 
         except sqlite3.Error as e:
             logger.error(f"Failed to check hash {hash_value[:8]}...: {e}")
+            return False
+        finally:
+            if conn:
+                conn.close()
+
+    def update_job_score(self, job_id: str, score: float) -> bool:
+        """
+        Update the score of a job in the database.
+
+        Args:
+            job_id: Job ID
+            score: New score value
+
+        Returns:
+            True if updated successfully, False otherwise
+        """
+        conn = None
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute("UPDATE jobs SET score = ? WHERE id = ?", (score, job_id))
+            conn.commit()
+            if cursor.rowcount == 0:
+                logger.error(f"Score update affected no rows for job {job_id}")
+                return False
+            return True
+        except sqlite3.Error as e:
+            logger.error(f"Failed to update score for job {job_id}: {e}")
             return False
         finally:
             if conn:

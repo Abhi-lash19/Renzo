@@ -22,13 +22,12 @@ def is_duplicate(job: 'Job', repository: JobRepository) -> bool:
     """
     job_hash = generate_job_hash(job.title, job.company, job.location)
 
-    # Try inserting directly
-    success = repository.insert_hash(job_hash)
-
-    if not success:
-        logger.debug(f"Duplicate job detected: {job.title} at {job.company}")
+    if repository.hash_exists(job_hash):
+        logger.info(f"Duplicate skipped: {job.title}")
         return True
 
-    # Insert the hash if not exists
-    repository.insert_hash(job_hash)
+    if not repository.insert_hash(job_hash):
+        logger.warning(f"Unable to record hash for {job.title}. Proceeding without duplicate protection.")
+        return False
+
     return False

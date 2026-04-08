@@ -31,11 +31,16 @@ def get_with_retry(url: str, params: Optional[dict] = None, retries: Optional[in
         try:
             response = requests.get(url, params=params, timeout=timeout)
 
-            if response.status_code == 200:
+            # Accept 200-299 as success (200 OK, 201 Created, etc.)
+            if 200 <= response.status_code < 300:
                 logger.debug(f"[{url}] Success on attempt {attempt + 1}")
                 return response
 
-            logger.warning(f"[{url}] Status: {response.status_code} on attempt {attempt + 1}")
+            # Log error response body for debugging
+            logger.warning(
+                f"[{url}] Status: {response.status_code} on attempt {attempt + 1} | "
+                f"Response: {response.text[:500] if response.text else 'no body'}"
+            )
 
         except requests.RequestException as e:
             logger.warning(f"[{url}] Attempt {attempt + 1} failed: {e}")

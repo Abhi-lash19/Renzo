@@ -8,11 +8,17 @@ os.makedirs(LOG_DIR, exist_ok=True)
 
 def get_logger(name: str):
     logger = logging.getLogger(name)
-    logger.setLevel(logging.INFO)
+
+    # FIX: enable DEBUG logs
+    logger.setLevel(logging.DEBUG)
 
     if not logger.handlers:
         file_handler = logging.FileHandler(f"{LOG_DIR}/{LOG_FILE}")
         console_handler = logging.StreamHandler()
+
+        # File → DEBUG, Console → INFO (clean output)
+        file_handler.setLevel(logging.DEBUG)
+        console_handler.setLevel(logging.DEBUG)
 
         formatter = logging.Formatter(
             "%(asctime)s | %(levelname)s | %(name)s | %(message)s"

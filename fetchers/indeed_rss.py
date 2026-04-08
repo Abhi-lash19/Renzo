@@ -22,13 +22,24 @@ class IndeedRSSFetcher(BaseJobSource):
         }
         url = f"{self.BASE_URL}?q={params['q']}&l={params['l']}"
 
-        feed = feedparser.parse(url)
+        logger.info(f"🔍 Indeed RSS: Fetching from {url}")
 
-        if feed.bozo:
-            logger.warning(f"Indeed RSS: Feed parsing issue: {feed.bozo_exception}")
+        try:
+            feed = feedparser.parse(url)
 
-        logger.debug(f"Indeed RSS: Fetched {len(feed.entries)} raw jobs")
-        return feed.entries
+            if feed.bozo:
+                logger.warning(f"Indeed RSS: Feed parsing issue: {feed.bozo_exception}")
+                logger.debug(f"Indeed RSS bozo type: {type(feed.bozo_exception)}")
+
+            entries_count = len(feed.entries) if hasattr(feed, 'entries') else 0
+            logger.info(f"✅ Indeed RSS: Fetched {entries_count} raw jobs")
+            
+            return feed.entries if hasattr(feed, 'entries') else []
+            
+        except Exception as e:
+            logger.error(f"❌ Indeed RSS: Failed to fetch RSS feed: {e}")
+            logger.debug(f"Error type: {type(e).__name__}")
+            return []
 
     def normalize(self, raw: Dict[str, Any]) -> Job:
         """Normalize Indeed RSS entry to Job object."""
@@ -43,6 +54,10 @@ class IndeedRSSFetcher(BaseJobSource):
                 posted_at = datetime.utcnow()
         else:
             posted_at = datetime.utcnow()
+
+        # Ensure naive UTC datetime
+        if posted_at.tzinfo is not None:
+            posted_at = posted_at.replace(tzinfo=None)
 
         return Job(
             job_id=raw.get("id", raw.get("link", "")),

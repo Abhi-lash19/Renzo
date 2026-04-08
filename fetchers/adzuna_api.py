@@ -9,52 +9,109 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _mask(value: str) -> str:
+    """Mask sensitive values for logging."""
+    if not value:
+        return "None"
+    return value[:3] + "****" + value[-2:]
+
+
 class AdzunaFetcher(BaseJobSource):
     """Fetcher for Adzuna job API."""
 
-    BASE_URL = "https://api.adzuna.com/v1/api/jobs/in/search/1"
 
     def fetch(self) -> List[Dict[str, Any]]:
         """Fetch jobs from Adzuna API with pagination."""
+
+        #  Log credentials safely
+        logger.debug(
+            f"Adzuna creds → app_id={_mask(settings.ADZUNA_APP_ID)}, "
+            f"key={_mask(settings.ADZUNA_API_KEY)}"
+        )
+
+        # Validate credentials
+        if not settings.ADZUNA_APP_ID or not settings.ADZUNA_API_KEY:
+            logger.warning("Adzuna: API credentials not configured in .env file - skipping")
+            return []
+
+        if settings.ADZUNA_APP_ID == "your_app_id" or settings.ADZUNA_API_KEY == "your_api_key":
+            logger.warning("Adzuna: Using placeholder API credentials. Please update .env - skipping")
+            return []
+
+        # Ensure search keyword exists
+        search_query = settings.SEARCH_KEYWORDS.strip() if settings.SEARCH_KEYWORDS else "developer"
+
+        if not search_query:
+            logger.warning("Adzuna: SEARCH_KEYWORDS is empty, defaulting to 'developer'")
+            search_query = "developer"
+
+        logger.info(f"🔍 Adzuna: Starting fetch with query='{search_query}'")
+
         all_results = []
         results_per_page = 50
 
         for page in range(settings.PAGINATION_PAGES):
-            start = page * results_per_page
             params = {
                 "app_id": settings.ADZUNA_APP_ID,
                 "app_key": settings.ADZUNA_API_KEY,
                 "results_per_page": results_per_page,
-                "start": start,
-                "what": settings.SEARCH_KEYWORDS
+                "what": search_query
             }
 
-            response = get_with_retry(self.BASE_URL, params=params)
+            # Safe params logging
+            safe_params = {k: ("****" if "key" in k or "app_id" in k else v) for k, v in params.items()}
+            logger.debug(f"Adzuna request params (page {page+1}): {safe_params}")
+
+            # Correct endpoint: page starts from 1
+            url = f"https://api.adzuna.com/v1/api/jobs/in/search/{page + 1}"
+            logger.debug(f"Adzuna URL: {url}")
+            
+            response = get_with_retry(url, params=params)
 
             if not response:
                 logger.warning(f"Adzuna: Failed to fetch page {page + 1}")
+                if page == 0:
+                    # First page failed, likely credential or endpoint issue
+                    logger.warning("Adzuna: First page failed - stopping fetch")
                 break
 
-            data = response.json()
-            results = data.get("results", [])
-            all_results.extend(results)
+            try:
+                data = response.json()
 
-            # If fewer results than requested, no more pages
-            if len(results) < results_per_page:
+                # Debug response structure
+                if "results" not in data:
+                    logger.warning(f"Adzuna: Unexpected response format - no 'results' key. Keys: {list(data.keys())}")
+                    logger.debug(f"Adzuna response: {data}")
+                    break
+
+                results = data.get("results", [])
+                logger.info(f"✅ Adzuna page {page+1}: fetched {len(results)} jobs")
+
+                all_results.extend(results)
+
+                if len(results) < results_per_page:
+                    logger.debug(f"Adzuna: Got {len(results)} < {results_per_page}, stopping pagination")
+                    break
+
+            except Exception as e:
+                logger.error(f"Adzuna: Failed to parse response on page {page + 1}: {e}")
+                logger.debug(f"Raw response: {response.text[:500]}")
                 break
 
-        logger.debug(f"Adzuna: Fetched {len(all_results)} raw jobs")
+        logger.info(f"🎯 Adzuna: Total fetched {len(all_results)} jobs")
         return all_results
 
     def normalize(self, raw: Dict[str, Any]) -> Job:
         """Normalize Adzuna job data to Job object."""
-        # Extract real posted_at from API response
+
         created_str = raw.get("created")
+
         if created_str:
             try:
-                # Adzuna dates are in ISO format, e.g., "2023-10-01T12:00:00Z"
                 posted_at = datetime.fromisoformat(created_str.replace('Z', '+00:00'))
-            except ValueError:
+                if posted_at.tzinfo is not None:
+                    posted_at = posted_at.replace(tzinfo=None)
+            except (ValueError, TypeError):
                 logger.warning(f"Invalid date format for job {raw.get('id')}: {created_str}")
                 posted_at = datetime.utcnow()
         else:
