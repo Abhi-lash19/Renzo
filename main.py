@@ -8,6 +8,9 @@ from pipeline.models import Job
 from pipeline.filter import passes_filter
 from pipeline.deduplicate import is_duplicate
 from pipeline.scorer import score_job
+from intelligence.skill_extractor import extract_skills
+from intelligence.skill_gap import compute_skill_gap
+from intelligence.resume_enhancer import generate_insight
 from storage.repository import JobRepository
 from utils.logger import get_logger
 from utils.profile_loader import load_profile
@@ -68,7 +71,10 @@ def filter_jobs(jobs: List[Job], profile: dict, fallback: bool = False) -> Tuple
             accepted_jobs.append(job)
         else:
             filtered_count += 1
-            logger.info(f"❌ Filter rejected: {job.title or 'Unknown title'} | Reason: {reason}")
+            logger.debug(
+                f"Filter rejected: job_id={getattr(job, 'job_id', 'unknown')} "
+                f"title={job.title or 'Unknown'} source={job.source or 'Unknown'} reason={reason}"
+            )
 
     return accepted_jobs, filtered_count
 
@@ -89,17 +95,31 @@ def deduplicate_jobs(jobs: List[Job], repository: JobRepository) -> Tuple[List[J
 
 
 def store_jobs(jobs: List[Job], repository: JobRepository) -> List[Job]:
-    """Store jobs in the repository and log each successful insert."""
+    """Store jobs in the repository and log storage summary."""
     stored_jobs: List[Job] = []
+    failed_count = 0
 
-    for job in jobs:
+    for idx, job in enumerate(jobs, start=1):
         if repository.insert_job(job):
             stored_jobs.append(job)
-            logger.info(f"💾 Stored: {job.title} | Source: {job.source}")
+            logger.debug(
+                f"Stored job: job_id={getattr(job, 'job_id', 'unknown')} "
+                f"title={job.title or 'Unknown'} source={job.source or 'Unknown'}"
+            )
         else:
-            logger.warning(f"Failed to store job: {job.title} | Source: {job.source}")
+            failed_count += 1
+            logger.debug(
+                f"Storage failed: job_id={getattr(job, 'job_id', 'unknown')} "
+                f"title={job.title or 'Unknown'} source={job.source or 'Unknown'}"
+            )
 
-    logger.info(f"📦 Total stored jobs: {len(stored_jobs)}")
+        if idx % 100 == 0:
+            logger.debug(f"Processed {idx} job storage attempts")
+
+    logger.info(
+        f"📦 Storage summary: stored={len(stored_jobs)} failed={failed_count} "
+        f"attempted={len(jobs)}"
+    )
 
     if len(stored_jobs) == 0:
         logger.critical("No jobs stored. Possible causes: filtering too strict / DB issue")
@@ -108,27 +128,37 @@ def store_jobs(jobs: List[Job], repository: JobRepository) -> List[Job]:
 
 
 def score_stored_jobs(jobs: List[Job], repository: JobRepository, profile: dict) -> int:
-    """Score all stored jobs and persist the score to the database."""
+    """Score all stored jobs, compute insights, and persist the score to the database."""
     scored_count = 0
 
     for job in jobs:
+        extract_skills(job, profile)
+        compute_skill_gap(job, profile)
+        job.insight = generate_insight(job, profile)
         score_job(job, profile)
 
         if repository.update_job_score(job.job_id, job.score):
             scored_count += 1
-            logger.info(f"⭐ Scored: {job.title} → score: {job.score:.2f}")
-
+            logger.debug(
+                f"Scored job: job_id={job.job_id} title={job.title or 'Unknown'} "
+                f"score={job.score:.2f} matched={len(job.skills)} "
+                f"missing={len(job.missing_skills)}"
+            )
             if job.score == 0:
-                logger.warning(f"⚠️ Zero score for stored job: {job.title}")
+                logger.warning(
+                    f"Zero score for stored job: job_id={job.job_id} title={job.title or 'Unknown'}"
+                )
         else:
-            logger.error(f"Failed to persist score for job: {job.title}")
+            logger.warning(
+                f"Failed to persist score for job: job_id={job.job_id} title={job.title or 'Unknown'}"
+            )
 
     logger.info(f"📈 Total scored jobs: {scored_count}/{len(jobs)}")
     return scored_count
 
 
-def print_top_jobs(repository: JobRepository) -> None:
-    """Retrieve and print top jobs from the DB."""
+def print_top_jobs(repository: JobRepository, profile: dict) -> None:
+    """Retrieve and print top jobs from the DB with skills and insight."""
     top_jobs = repository.get_top_jobs(limit=30)
 
     if not top_jobs:
@@ -137,9 +167,15 @@ def print_top_jobs(repository: JobRepository) -> None:
 
     logger.info("🏆 Top Jobs:")
     for index, job in enumerate(top_jobs[:5], start=1):
-        logger.info(f"{index}. Title: {job.title}")
+        extract_skills(job, profile)
+        compute_skill_gap(job, profile)
+        insight = generate_insight(job, profile)
+
+        logger.info(f"{index}. {job.title} (Score: {job.score:.2f})")
         logger.info(f"   Company: {job.company}")
-        logger.info(f"   Score: {job.score:.2f}")
+        logger.info(f"   Matched: {', '.join(job.skills) if job.skills else 'None'}")
+        logger.info(f"   Missing: {', '.join(job.missing_skills) if job.missing_skills else 'None'}")
+        logger.info(f"   Insight: {insight.get('recommendation')}")
         logger.info(f"   Source: {job.source}")
 
     logger.info(f"Displayed top {min(len(top_jobs), 5)} of {len(top_jobs)} jobs")
@@ -180,14 +216,7 @@ def process_jobs(jobs: List[Job], repository: JobRepository, profile: dict) -> i
 
     logger.info(f"📦 Jobs stored: {len(stored_jobs)}")
 
-    scored_count = 0
-    for job in stored_jobs:
-        score_job(job, profile)
-        if repository.update_job_score(job.job_id, job.score):
-            scored_count += 1
-            logger.info(f"⭐ Scored: {job.title} → score: {job.score:.2f}")
-        else:
-            logger.error(f"Failed to persist score for job: {job.title}")
+    scored_count = score_stored_jobs(stored_jobs, repository, profile)
 
     logger.info("📊 Pipeline Summary:")
     logger.info(f"  Fetched: {total_fetched} jobs")
@@ -233,7 +262,7 @@ def main():
         logger.warning("  2. Database error (check permissions, disk space)")
         logger.warning("  3. Jobs contain missing required fields")
     else:
-        print_top_jobs(repository)
+        print_top_jobs(repository, profile)
 
     logger.info("🎯 Pipeline completed")
 

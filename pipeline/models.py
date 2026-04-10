@@ -33,6 +33,7 @@ class Job:
         self.is_remote: bool = False
         self.is_startup: bool = False
         self.missing_skills: List[str] = []
+        self.insight: dict = {}
 
     def __repr__(self) -> str:
         return f"<Job {self.title} at {self.company}>"

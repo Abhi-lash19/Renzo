@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta
 from typing import Dict, List, Set, TYPE_CHECKING
+from intelligence.skill_extractor import extract_skills
 from utils.logger import get_logger
+from utils.text_utils import contains_term, normalize_text
 
 if TYPE_CHECKING:
     from pipeline.models import Job
@@ -8,24 +10,34 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-def extract_skills(job: 'Job', profile: Dict[str, List[str]]) -> Set[str]:
-    """Extract matching skills from the job using profile keywords."""
-    combined_text = (job.title + " " + job.description).lower()
-    all_skills = [skill for skill in profile.get("core_skills", []) if skill] + [skill for skill in profile.get("secondary_skills", []) if skill]
-
-    extracted = {skill for skill in all_skills if skill in combined_text}
-    return extracted
+def _normalize_skill_set(skills: List[str]) -> Set[str]:
+    return {
+        normalize_text(skill)
+        for skill in skills
+        if skill and skill.strip()
+    }
 
 
 def calculate_skill_score(job: 'Job', profile: Dict[str, List[str]]) -> float:
-    """Calculate a normalized skill score based on profile skill coverage."""
-    all_profile_skills = [skill for skill in profile.get("core_skills", []) if skill] + [skill for skill in profile.get("secondary_skills", []) if skill]
+    """Calculate a weighted skill match score using core and secondary priority."""
+    core_skills = _normalize_skill_set(profile.get("core_skills", []))
+    secondary_skills = _normalize_skill_set(profile.get("secondary_skills", []))
+    job_skills = _normalize_skill_set(job.skills or [])
 
-    if not all_profile_skills:
+    if not core_skills and not secondary_skills:
         return 0.0
 
-    matching_skills = len(job.skills)
-    score = matching_skills / len(all_profile_skills)
+    core_matches = len(job_skills & core_skills)
+    secondary_matches = len(job_skills & secondary_skills)
+
+    core_weight = 1.0
+    secondary_weight = 0.5
+    total_possible = len(core_skills) * core_weight + len(secondary_skills) * secondary_weight
+
+    if total_possible == 0:
+        return 0.0
+
+    score = (core_matches * core_weight + secondary_matches * secondary_weight) / total_possible
     return min(score, 1.0)
 
 
@@ -45,59 +57,77 @@ def calculate_recency_score(job: 'Job') -> float:
 
 def calculate_role_score(job: 'Job', profile: Dict[str, List[str]]) -> float:
     """Calculate role relevance score based on preferred roles."""
-    title_lower = job.title.lower()
+    title_text = normalize_text(job.title)
 
     for role in profile.get("preferred_roles", []):
-        if role and role == title_lower:
+        if role and normalize_text(role) == title_text:
             return 1.0
 
     for role in profile.get("preferred_roles", []):
-        if role and role in title_lower:
+        if role and normalize_text(role) in title_text:
             return 0.5
 
     return 0.0
 
 
-def calculate_keyword_bonus(job: 'Job', profile: Dict[str, List[str]]) -> float:
-    """Calculate a small bonus for matching preferred and bonus keywords."""
-    combined = (job.title + " " + job.company + " " + job.description).lower()
-    keywords = [kw for kw in profile.get("preferred_keywords", []) if kw] + [kw for kw in profile.get("bonus_keywords", []) if kw]
-    matches = sum(1 for keyword in keywords if keyword in combined)
-    return min(matches * 0.03, 0.15)
+def calculate_alignment_score(job: 'Job', profile: Dict[str, List[str]]) -> float:
+    """Calculate alignment score from profile keywords, projects, and experience."""
+    combined_text = normalize_text(" ".join(filter(None, [job.title, job.description, job.company])))
+    alignment_keywords = [
+        keyword
+        for keyword in profile.get("projects", [])
+        + profile.get("experience", [])
+        + profile.get("preferred_keywords", [])
+        if keyword and keyword.strip()
+    ]
+
+    if not alignment_keywords or not combined_text:
+        return 0.0
+
+    match_count = 0
+    for keyword in alignment_keywords:
+        if contains_term(combined_text, keyword):
+            match_count += 1
+
+    return min(match_count / len(alignment_keywords), 1.0)
 
 
-def calculate_startup_bonus(job: 'Job') -> float:
-    """Calculate startup bonus for startup-related postings."""
-    startup_keywords = ["startup", "early stage", "series a", "series b", "seed", "seed stage"]
-    combined = (job.title + " " + job.company + " " + job.description).lower()
+def calculate_bonus_score(job: 'Job', profile: Dict[str, List[str]]) -> float:
+    """Calculate bonus score from profile bonus keywords."""
+    combined_text = normalize_text(" ".join(filter(None, [job.title, job.company, job.description])))
+    bonus_keywords = [kw for kw in profile.get("bonus_keywords", []) if kw and kw.strip()]
 
-    return 0.05 if any(keyword in combined for keyword in startup_keywords) else 0.0
+    if not bonus_keywords or not combined_text:
+        return 0.0
+
+    matches = sum(1 for keyword in bonus_keywords if normalize_text(keyword) in combined_text)
+    return min(matches * 0.025, 0.05)
 
 
 def score_job(job: 'Job', profile: Dict[str, List[str]]) -> float:
-    """Compute a job score using profile-driven relevance signals."""
-    job.skills = list(extract_skills(job, profile))
+    """Compute a job score using precomputed skills and profile signals."""
+    if not job.skills:
+        extract_skills(job, profile)
+
     skill_score = calculate_skill_score(job, profile)
     recency_score = calculate_recency_score(job)
     role_score = calculate_role_score(job, profile)
-    bonus_score = calculate_keyword_bonus(job, profile)
-    startup_bonus = calculate_startup_bonus(job)
+    alignment_score = calculate_alignment_score(job, profile)
+    bonus_score = calculate_bonus_score(job, profile)
 
-    final_score = (
-        (skill_score * 0.45) +
-        (recency_score * 0.25) +
+    raw_score = (
+        (skill_score * 0.4) +
+        (recency_score * 0.2) +
         (role_score * 0.15) +
-        bonus_score +
-        startup_bonus
+        (alignment_score * 0.2) +
+        bonus_score
     )
 
-    job.score = min(max(final_score, 0.0), 1.0)
+    job.score = min(max(raw_score * 10.0, 0.0), 10.0)
 
     logger.debug(
-        f"Scored {job.title} at {job.company}: "
-        f"skill={skill_score:.2f}, recency={recency_score:.2f}, "
-        f"role={role_score:.2f}, bonus={bonus_score:.2f}, "
-        f"startup={startup_bonus:.2f} → {job.score:.2f}"
+        f"[SCORER] job_id={getattr(job, 'job_id', 'unknown')} "
+        f"score={job.score:.2f} skill={skill_score:.2f} recency={recency_score:.2f} "
+        f"role={role_score:.2f} alignment={alignment_score:.2f} bonus={bonus_score:.2f}"
     )
-
     return job.score

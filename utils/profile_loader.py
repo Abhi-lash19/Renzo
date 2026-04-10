@@ -8,6 +8,8 @@ DEFAULT_KEYS = [
     "exclude_keywords",
     "bonus_keywords",
     "preferred_keywords",
+    "projects",
+    "experience",
 ]
 
 

@@ -30,6 +30,13 @@ class JobRepository:
                     conn.close()
         return False
 
+    def _job_context(self, job: 'Job') -> str:
+        return (
+            f"job_id={job.job_id or 'unknown'} "
+            f"title={job.title or 'Unknown'} "
+            f"source={job.source or 'Unknown'}"
+        )
+
     def insert_job(self, job: 'Job') -> bool:
         """
         Insert a job into the database.
@@ -40,13 +47,15 @@ class JobRepository:
         Returns:
             True if inserted successfully, False otherwise
         """
-        if not job.title or not job.company or not job.url:
-            logger.error(
-                f"Invalid job data, cannot store: title={job.title!r}, company={job.company!r}, url={job.url!r}"
+        if not job.job_id or not job.title or not job.company or not job.url:
+            logger.warning(
+                f"Invalid job data, cannot store: job_id={job.job_id or 'missing'} "
+                f"title={job.title or 'missing'} company={job.company or 'missing'} url={job.url or 'missing'}"
             )
             return False
 
-        logger.info(f"💾 Storing job: {job.title}")
+        context = self._job_context(job)
+        logger.debug(f"DB insert attempt: {context} score={job.score:.2f}")
 
         query = """
             INSERT OR IGNORE INTO jobs (
@@ -77,14 +86,16 @@ class JobRepository:
             cursor.execute(query, params)
             conn.commit()
             if cursor.rowcount == 0:
-                logger.info(f"Job already exists, skipping insert: {job.title}")
+                logger.debug(f"DB insert skipped duplicate: {context}")
                 return False
+
+            logger.debug(f"DB insert succeeded: {context}")
             return True
         except sqlite3.IntegrityError as e:
-            logger.error(f"Database integrity error inserting job {job.job_id}: {e}")
+            logger.error(f"Database integrity error inserting job: {context} error={e}")
             return False
         except sqlite3.Error as e:
-            logger.error(f"Failed to insert job {job.job_id}: {e}")
+            logger.error(f"Failed to insert job: {context} error={e}")
             return False
         finally:
             if conn:
@@ -109,9 +120,15 @@ class JobRepository:
             cursor = conn.cursor()
             cursor.execute(query, params)
             conn.commit()
-            return cursor.rowcount == 1 or self.hash_exists(hash_value)
+            inserted = cursor.rowcount == 1
+            if inserted:
+                logger.debug(f"Hash inserted: {hash_value[:16]}...")
+                return True
+            exists = self.hash_exists(hash_value)
+            logger.debug(f"Hash already exists: {hash_value[:16]}... exists={exists}")
+            return exists
         except sqlite3.Error as e:
-            logger.warning(f"Failed to insert hash {hash_value[:8]}...: {e}")
+            logger.warning(f"Failed to insert hash {hash_value[:16]}...: {e}")
             return False
         finally:
             if conn:
@@ -137,11 +154,12 @@ class JobRepository:
                 (hash_value,)
             )
             result = cursor.fetchone()
-
-            return result is not None
+            exists = result is not None
+            logger.debug(f"Hash exists check: {hash_value[:16]}... exists={exists}")
+            return exists
 
         except sqlite3.Error as e:
-            logger.error(f"Failed to check hash {hash_value[:8]}...: {e}")
+            logger.error(f"Failed to check hash {hash_value[:16]}...: {e}")
             return False
         finally:
             if conn:
