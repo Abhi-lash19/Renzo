@@ -27,9 +27,10 @@ class Job:
         self.posted_at = posted_at
         self.fetched_at = fetched_at
 
-        # computed later
         self.skills: List[str] = []
+        self.detected_skills: List[str] = []
         self.score: float = 0.0
+        self.score_breakdown: dict = {}
         self.is_remote: bool = False
         self.is_startup: bool = False
         self.missing_skills: List[str] = []

@@ -12,17 +12,15 @@ def generate_job_hash(
     title: Optional[str],
     company: Optional[str],
     location: Optional[str],
-    source: Optional[str],
+    source: Optional[str] = None,
 ) -> str:
     """
-    Generate a SHA-256 hash for job deduplication based on title, company, location, and source.
+    Generate a SHA-256 hash for job deduplication based on title, company, and location.
 
     Args:
         title: Job title
         company: Company name
         location: Job location
-        source: Job source identifier
-
     Returns:
         Hexadecimal hash string
     """
@@ -30,6 +28,5 @@ def generate_job_hash(
         _normalize_value(title)
         + _normalize_value(company)
         + _normalize_value(location)
-        + _normalize_value(source)
     )
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
