@@ -12,7 +12,7 @@ logger = get_logger(__name__)
 
 SENIORITY_TERMS = ["senior", "lead", "principal"]
 EXCLUDE_TERMS = ["sales", "marketing"]
-TARGET_ROLES = ["backend", "python", "software engineer", "api", "microservices"]
+TARGET_ROLES = []
 ROLE_EXCLUDE_TERMS = ["frontend", "react", "angular", "ui", "mobile", "ios", "android", "flutter"]
 
 
@@ -104,7 +104,12 @@ def passes_filter(job: "Job", profile: dict, threshold: int = 4) -> Tuple[bool, 
         detected_skills = getattr(job, "detected_skills", []) or []
         matched_skills = getattr(job, "skills", []) or []
 
-        role_match = _has_any_term(title_text, target_roles)
+        role_match = _has_any_term(title_text, target_roles) or _has_any_term(job_text, target_roles)
+        if not role_match:
+            for role in target_roles:
+                if role in job_text:
+                    role_match = True
+                    break
         skill_match_count = max(len(matched_skills), len(detected_skills) // 2)
         strong_skill_match = skill_match_count >= 1
 

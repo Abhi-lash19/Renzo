@@ -38,9 +38,10 @@ class JobRepository:
         query = """
             INSERT OR IGNORE INTO jobs (
                 id, title, company, location, description, url, source,
-                posted_at, fetched_at, score, is_remote, is_startup
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                posted_at, fetched_at, score, is_remote, is_startup, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
+        now_str = datetime.utcnow().isoformat()
         params = (
             job.job_id,
             job.title,
@@ -54,6 +55,7 @@ class JobRepository:
             job.score,
             int(job.is_remote),
             int(job.is_startup),
+            now_str,
         )
 
         conn = None
@@ -152,10 +154,14 @@ class JobRepository:
 
     def update_job_score(self, job_id: str, score: float) -> bool:
         conn = None
+        now_str = datetime.utcnow().isoformat()
         try:
             conn = get_connection()
             cursor = conn.cursor()
-            cursor.execute("UPDATE jobs SET score = ? WHERE id = ?", (score, job_id))
+            cursor.execute(
+                "UPDATE jobs SET score = ?, updated_at = ? WHERE id = ?",
+                (score, now_str, job_id),
+            )
             conn.commit()
             if cursor.rowcount == 0:
                 logger.error(f"Score update affected no rows for job {job_id}")

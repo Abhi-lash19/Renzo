@@ -28,6 +28,57 @@ def get_connection():
         raise
 
 
+def check_column_exists(cursor, table_name: str, column_name: str) -> bool:
+    cursor.execute(f"PRAGMA table_info({table_name})")
+    columns = [col[1] for col in cursor.fetchall()]
+    return column_name in columns
+
+
+def apply_migrations(conn):
+    cursor = conn.cursor()
+    logger.info("[DB MIGRATION] Starting database migrations...")
+    
+    # 1. Add Columns to jobs safely
+    columns_to_add = [
+        ("jobs", "updated_at", "DATETIME"),
+        ("jobs", "raw_json", "TEXT")
+    ]
+    
+    for table, col_name, col_type in columns_to_add:
+        if not check_column_exists(cursor, table, col_name):
+            try:
+                cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}")
+                logger.info(f"[DB MIGRATION] Adding column: {col_name}")
+            except Exception as e:
+                logger.error(f"[DB MIGRATION] Failed to add column {col_name}: {e}")
+                
+    # 2. Add Indexes
+    indexes = [
+        ("idx_jobs_source", "jobs(source)"),
+        ("idx_jobs_posted_at", "jobs(posted_at)"),
+        ("idx_jobs_score", "jobs(score)"),
+        ("idx_jobs_status", "jobs(status)"),
+        ("idx_job_skills_job_id", "job_skills(job_id)"),
+        ("idx_missing_skills_job_id", "missing_skills(job_id)")
+    ]
+    
+    for idx_name, idx_def in indexes:
+        try:
+            cursor.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {idx_def}")
+            logger.info(f"[DB MIGRATION] Index created: {idx_name}")
+        except Exception as e:
+            logger.error(f"[DB MIGRATION] Failed to create index {idx_name}: {e}")
+            
+    # 3. Create UNIQUE Index for URL
+    try:
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_url_unique ON jobs(url)")
+        logger.info("[DB MIGRATION] Index created: idx_jobs_url_unique")
+    except Exception as e:
+        logger.error(f"[DB MIGRATION] Failed to create unique index idx_jobs_url_unique: {e}")
+        
+    logger.info("[DB MIGRATION] Migrations completed successfully.")
+
+
 def init_db():
     conn = None
     try:
@@ -84,6 +135,8 @@ def init_db():
         )
         """)
         logger.debug("[DB] Table 'job_hashes' ensured")
+        
+        apply_migrations(conn)
 
         conn.commit()
         logger.info("[DB] Database initialized and committed successfully")
