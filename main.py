@@ -9,7 +9,6 @@ from fetchers.adzuna_api import AdzunaFetcher
 from fetchers.indeed_rss import IndeedRSSFetcher
 from fetchers.remotive_api import RemotiveFetcher
 from intelligence.resume_enhancer import generate_insight
-from intelligence.skill_extractor import extract_skills
 from intelligence.skill_gap import compute_skill_gap
 from pipeline.deduplicate import is_duplicate
 from pipeline.filter import passes_filter
@@ -143,17 +142,36 @@ def store_jobs(jobs: List[Job], repository: JobRepository) -> List[Job]:
 
 
 def enrich_jobs(jobs: List[Job], profile: dict) -> Tuple[List[Job], float]:
+    """
+    Enrich jobs with scoring.
+
+    IMPORTANT:
+    - Skill extraction MUST NOT happen here.
+    - build_match_data() is the single source of truth and should already be executed before this step.
+    """
     enriched_jobs: List[Job] = []
     total_score = 0.0
+
     for job in jobs:
         try:
-            extract_skills(job, profile)
+            # SAFETY: Ensure match_data exists (fail fast if pipeline order breaks)
+            if not getattr(job, "match_data", None):
+                logger.error(
+                    f"[PIPELINE_ERROR] Missing match_data before scoring "
+                    f"job_id={getattr(job, 'job_id', 'unknown')} title={getattr(job, 'title', '')}"
+                )
+                raise ValueError("match_data must be built before scoring")
+
             score = score_job(job, profile)
             total_score += score
             enriched_jobs.append(job)
+
         except Exception as e:
-            logger.exception(f"Error enriching job {getattr(job, 'job_id', 'unknown')}: {e}")
-            
+            logger.exception(
+                f"Error enriching job job_id={getattr(job, 'job_id', 'unknown')} "
+                f"title={getattr(job, 'title', '')}: {e}"
+            )
+
     avg_score = (total_score / len(enriched_jobs)) if enriched_jobs else 0.0
     return enriched_jobs, avg_score
 
@@ -257,18 +275,35 @@ def export_outputs(repository: JobRepository, profile: dict) -> None:
         logger.exception(f"Error exporting outputs: {e}")
 
 def score_stored_jobs(jobs: List[Job], repository: JobRepository, profile: dict) -> int:
+    """
+    Re-score already stored jobs.
+
+    IMPORTANT:
+    - Skill extraction MUST NOT happen here.
+    - match_data must already exist.
+    """
     scored_count = 0
+
     for job in jobs:
         try:
-            extract_skills(job, profile)
+            if not getattr(job, "match_data", None):
+                logger.error(
+                    f"[PIPELINE_ERROR] Missing match_data before re-scoring "
+                    f"job_id={getattr(job, 'job_id', 'unknown')}"
+                )
+                raise ValueError("match_data must be built before scoring")
+
             compute_skill_gap(job, profile)
             job.insight = generate_insight(job, profile)
             score_job(job, profile)
 
             if repository.update_job_score(job.job_id, job.score):
                 scored_count += 1
+
         except Exception as e:
-            logger.exception(f"Error scoring/updating job: {e}")
+            logger.exception(
+                f"Error scoring/updating job job_id={getattr(job, 'job_id', 'unknown')}: {e}"
+            )
 
     return scored_count
 
@@ -282,7 +317,11 @@ def print_top_jobs(repository: JobRepository, profile: dict) -> None:
         logger.info("🏆 Top Jobs:")
         for index, job in enumerate(top_jobs[:5], start=1):
             try:
-                extract_skills(job, profile)
+                if not getattr(job, "match_data", None):
+                    logger.warning(
+                        f"[PIPELINE_WARNING] match_data missing during print for job_id={job.job_id}"
+                    )
+
                 compute_skill_gap(job, profile)
                 insight = generate_insight(job, profile)
 

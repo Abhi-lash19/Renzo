@@ -4,7 +4,7 @@ import sys
 
 LOG_DIR = "logs"
 LOG_FILE = "app.log"
-DEFAULT_LEVEL = "INFO"
+DEFAULT_LEVEL = "DEBUG"
 
 os.makedirs(LOG_DIR, exist_ok=True)
 

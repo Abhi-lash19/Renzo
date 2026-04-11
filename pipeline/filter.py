@@ -43,21 +43,21 @@ def passes_filter(job: "Job", profile: dict, threshold: int = 4) -> Tuple[bool, 
         match_data = job.match_data
 
         # 1. Strict Exclusions Rule
-        if match_data["excluded"]:
+        if match_data.get("excluded", False):
             return False, "excluded by rigid constraints", 0.0
 
         # 2. Extract matching signals globally
-        role_match = match_data["role_match"]
-        matched_skills = match_data["matched_skills"]
-        skill_match_count = max(len(matched_skills), len(getattr(job, "detected_skills", [])) // 2)
-        strong_skill_match = skill_match_count >= 1
+        role_match = match_data.get("role_match", False)
+        matched_skills = match_data.get("matched_skills", [])
+        skill_match_count = match_data.get("skill_overlap", 0)
+        strong_skill_match = skill_match_count >= 2
 
         # 3. Reject if neither role nor skills aligned
         if not (role_match or strong_skill_match):
             return False, "missing target role match and strong skill match", 0.0
 
         # 4. Generate Signal Score
-        keyword_match_count = len(match_data["matched_keywords"])
+        keyword_match_count = len(match_data.get("matched_keywords", []))
         recency_score_val = get_recency_score_filter(job)
 
         filter_score = (

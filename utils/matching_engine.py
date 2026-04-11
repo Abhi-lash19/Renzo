@@ -73,37 +73,101 @@ def match_roles(title: str, description: str, profile: Dict[str, Any]) -> bool:
     return False
 
 
-def build_match_data(job: "Job", profile: Dict[str, Any]) -> None:
-    """Single Source of Truth: computes matching points once and saves directly to job."""
-    
-    # Avoid recomputation
-    if hasattr(job, "match_data") and job.match_data:
-        return
+def build_match_data(job: "Job", profile: dict) -> dict:
+    """
+    Build standardized match data for a job.
 
-    title_text = normalize_text(getattr(job, "title", ""))
-    job_text = normalize_text(f"{getattr(job, 'title', '')} {getattr(job, 'description', '')}")
-    
-    # Strict exclusion check
-    is_excluded = detect_exclusions(title_text, profile)
+    This is the SINGLE SOURCE OF TRUTH for:
+    - skill matching
+    - title similarity
+    - experience alignment
+    - filtering signals (excluded, role_match, keywords)
+    """
 
-    # Role check
-    role_match = match_roles(title_text, getattr(job, 'description', ''), profile)
-    
-    # Ensure extractor runs globally to grab `job.skills`
-    extract_skills(job, profile)
-    matched_skills = list(set(getattr(job, "skills", []) or []))
-    
-    # Keyword check
-    preferred_keywords = get_profile_list(profile, "preferred_keywords")
-    matched_keywords = [
-        kw for kw in preferred_keywords
-        if contains_term(job_text, kw)
-    ]
-    
-    # Save cache struct
-    job.match_data = {
-        "role_match": role_match,
-        "matched_skills": matched_skills,
-        "matched_keywords": matched_keywords,
-        "excluded": is_excluded
-    }
+    if not job:
+        raise ValueError("Job cannot be None")
+
+    if not profile:
+        raise ValueError("Profile cannot be empty")
+
+    try:
+        title = job.title or ""
+        description = job.description or ""
+
+        job_text = f"{title} {description}".lower()
+
+        # -------------------------------
+        # 1. SKILL MATCHING
+        # -------------------------------
+        user_skills = set(profile.get("skills", []))
+        matched_skills = set()
+
+        for skill in user_skills:
+            if skill.lower() in job_text:
+                matched_skills.add(skill.lower())
+
+        missing_skills = list(user_skills - matched_skills)
+        matched_skills = list(matched_skills)
+        skill_overlap = len(matched_skills)
+
+        # -------------------------------
+        # 2. ROLE MATCH
+        # -------------------------------
+        role_match = match_roles(title, description, profile)
+
+        # -------------------------------
+        # 3. EXCLUSION CHECK
+        # -------------------------------
+        excluded = detect_exclusions(job_text, profile)
+
+        # -------------------------------
+        # 4. KEYWORD MATCHING
+        # -------------------------------
+        preferred_keywords = get_profile_list(profile, "preferred_keywords")
+        bonus_keywords = get_profile_list(profile, "bonus_keywords")
+
+        matched_keywords = []
+
+        for kw in preferred_keywords + bonus_keywords:
+            if kw in job_text:
+                matched_keywords.append(kw)
+
+        # -------------------------------
+        # 5. TITLE MATCH (for scoring phase)
+        # -------------------------------
+        title_norm = normalize_text(title)
+        target_roles = profile.get("target_roles", [])
+
+        title_match = 0.0
+        for role in target_roles:
+            if role.lower() in title_norm:
+                title_match = 1.0
+                break
+
+        # -------------------------------
+        # 6. EXPERIENCE (placeholder)
+        # -------------------------------
+        experience_match = 1.0
+
+        match_data = {
+            "matched_skills": matched_skills,
+            "missing_skills": missing_skills,
+            "skill_overlap": skill_overlap,
+
+            "role_match": role_match,
+            "excluded": excluded,
+            "matched_keywords": matched_keywords,
+
+            "title_match": title_match,
+            "experience_match": experience_match,
+        }
+
+        job.match_data = match_data
+
+        return match_data
+
+    except Exception as e:
+        logger.exception(
+            f"[MATCH_BUILD_ERROR] job_id={getattr(job, 'job_id', 'unknown')} error={e}"
+        )
+        raise
