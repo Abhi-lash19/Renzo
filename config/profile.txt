@@ -9,61 +9,67 @@ experience_level: 0-2 years
 # CORE SKILLS (HIGH PRIORITY)
 # =========================
 core_skills:
-python, aws, backend, api, rest, lambda, microservices
+python, aws, backend, api, rest, microservices, lambda, event driven, distributed systems
 
 # =========================
 # SECONDARY SKILLS
 # =========================
 secondary_skills:
-docker, kubernetes, mysql, graphql, fastapi, node.js, sql, datadog, mulesoft
+docker, kubernetes, mysql, graphql, fastapi, node, sql, datadog, mulesoft, terraform
 
 # =========================
 # CLOUD & DEVOPS
 # =========================
 cloud:
-aws, s3, sqs, sns, api gateway, ec2, ecr, eks, ecs
+aws, s3, sqs, sns, api gateway, ec2, ecr, eks, ecs, cloudwatch
 
 devops:
-docker, kubernetes, github actions, gitlab ci, terraform
+docker, kubernetes, github actions, gitlab ci, terraform, ci cd
 
 # =========================
-# PROJECT KEYWORDS (VERY IMPORTANT)
+# PROJECT KEYWORDS
 # =========================
 projects:
-monitoring system, ci/cd pipeline, microservices, nlp, face recognition, real-time system, analytics
+monitoring system, real time system, microservices, nlp, analytics, ci cd pipeline, infrastructure automation
 
 # =========================
 # EXPERIENCE KEYWORDS
 # =========================
 experience:
-event-driven architecture, system integration, api integration, cloud automation, distributed systems
+event driven architecture, system integration, api integration, cloud automation, serverless, distributed systems
 
 # =========================
 # JOB PREFERENCES
 # =========================
 preferred_roles:
-backend developer, software engineer, python developer
+backend developer, python developer, software engineer, backend engineer
 
 preferred_keywords:
-backend, api, microservices, cloud, aws
+backend, api, microservices, aws, cloud, rest, lambda, serverless
 
 # =========================
-# EXCLUSIONS (FILTER OUT)
+# STRICT TARGET ROLES (NEW - IMPORTANT)
+# =========================
+target_roles:
+backend, python, api, microservices, software engineer, cloud engineer
+
+# =========================
+# EXCLUSIONS (VERY IMPORTANT)
 # =========================
 exclude_keywords:
-frontend, react, angular, ui designer, senior, lead, principal
+angular, ui, mobile, ios, android, wordpress, php, shopify, lead, principal
 
 # =========================
-# FLEXIBLE KEYWORDS (OPTIONAL BOOST)
+# BONUS SIGNALS
 # =========================
 bonus_keywords:
-startup, early stage, high growth, saas
+startup, early stage, high growth, saas, cloud native
 
 # =========================
-# LOCATION & MODE
+# LOCATION
 # =========================
 location:
-india, remote
+india, Pune, Hyderabad, Nodia, remote
 
 remote_preferred:
 true

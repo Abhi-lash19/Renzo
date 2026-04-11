@@ -62,12 +62,18 @@ def fetch_all_jobs() -> List[Job]:
         logger.error("❌ CRITICAL: No jobs fetched from any source")
     return all_jobs
 
-def filter_jobs(jobs: List[Job], profile: dict, fallback: bool = False) -> Tuple[List[Job], int]:
+def filter_jobs(jobs: List[Job], profile: dict, fallback: bool = False) -> Tuple[List[Job], int, float]:
     accepted_jobs: List[Job] = []
     filtered_count = 0
-    for job in jobs[: settings.JOB_FETCH_LIMIT]:
+    total_score = 0.0
+    
+    threshold = 3 if fallback else 4
+    limit_jobs = jobs[: settings.JOB_FETCH_LIMIT]
+
+    for job in limit_jobs:
         try:
-            passed, reason = passes_filter(job, profile, fallback=fallback)
+            passed, reason, filter_score = passes_filter(job, profile, threshold=threshold)
+            total_score += filter_score
             if passed:
                 accepted_jobs.append(job)
             else:
@@ -75,11 +81,36 @@ def filter_jobs(jobs: List[Job], profile: dict, fallback: bool = False) -> Tuple
         except Exception as e:
             logger.exception(f"Error filtering job: {e}")
             filtered_count += 1
-    return accepted_jobs, filtered_count
+
+    # Fallback logic
+    if not fallback and len(accepted_jobs) < 20:
+        logger.info(f"Only {len(accepted_jobs)} passed limit. Engaging fallback threshold=3")
+        accepted_jobs = []
+        filtered_count = 0
+        total_score = 0.0
+        for job in limit_jobs:
+            try:
+                passed, reason, filter_score = passes_filter(job, profile, threshold=3)
+                total_score += filter_score
+                if passed:
+                    accepted_jobs.append(job)
+                else:
+                    filtered_count += 1
+            except Exception:
+                filtered_count += 1
+
+    evaluated_count = len(limit_jobs)
+    avg_score = (total_score / evaluated_count) if evaluated_count > 0 else 0.0
+    return accepted_jobs, filtered_count, avg_score
 
 def deduplicate_jobs(jobs: List[Job], repository: JobRepository) -> Tuple[List[Job], int]:
     unique_jobs: List[Job] = []
     duplicate_count = 0
+    
+    # clear local memory for fuzzy match this run
+    import pipeline.deduplicate
+    pipeline.deduplicate._local_jobs = [] 
+
     for job in jobs:
         try:
             if is_duplicate(job, repository):
@@ -95,6 +126,14 @@ def store_jobs(jobs: List[Job], repository: JobRepository) -> List[Job]:
     stored_jobs: List[Job] = []
     for job in jobs:
         try:
+            # Skip if missing job_id (SAFETY CHECK)
+            if not job.job_id:
+                logger.warning(f"Skipping job with missing ID: {job.title}")
+                continue
+
+            # Ensure globally unique job_id (CRITICAL FIX)
+            job.job_id = f"{job.source}_{job.job_id}"
+
             if repository.insert_job(job):
                 repository.insert_skills(job.job_id, job.skills)
                 stored_jobs.append(job)
@@ -103,16 +142,20 @@ def store_jobs(jobs: List[Job], repository: JobRepository) -> List[Job]:
     return stored_jobs
 
 
-def enrich_jobs(jobs: List[Job], profile: dict) -> List[Job]:
+def enrich_jobs(jobs: List[Job], profile: dict) -> Tuple[List[Job], float]:
     enriched_jobs: List[Job] = []
+    total_score = 0.0
     for job in jobs:
         try:
             extract_skills(job, profile)
-            score_job(job, profile)
+            score = score_job(job, profile)
+            total_score += score
             enriched_jobs.append(job)
         except Exception as e:
             logger.exception(f"Error enriching job {getattr(job, 'job_id', 'unknown')}: {e}")
-    return enriched_jobs
+            
+    avg_score = (total_score / len(enriched_jobs)) if enriched_jobs else 0.0
+    return enriched_jobs, avg_score
 
 
 def generate_intelligence(jobs: List[Job], repository: JobRepository, profile: dict) -> int:
@@ -267,24 +310,27 @@ def process_jobs(jobs: List[Job], repository: JobRepository, profile: dict) -> i
 
     try:
         filter_started = time.perf_counter()
-        filtered_jobs, filtered_count = filter_jobs(jobs, profile)
-        _stage_log("FILTER", filter_started, f"accepted={len(filtered_jobs)} rejected={filtered_count}")
+        filtered_jobs, filtered_count, avg_filter_score = filter_jobs(jobs, profile)
+        _stage_log("FILTER_TIME", filter_started, "finished filtering")
+        logger.info(f"[FILTER] total={total_fetched} accepted={len(filtered_jobs)} rejected={filtered_count} avg_score={avg_filter_score:.1f}")
 
         dedup_started = time.perf_counter()
         unique_jobs, duplicate_count = deduplicate_jobs(filtered_jobs, repository)
-        _stage_log("DEDUP", dedup_started, f"unique={len(unique_jobs)} duplicates={duplicate_count}")
+        _stage_log("DEDUP_TIME", dedup_started, "finished dedup")
+        logger.info(f"[DEDUP] unique={len(unique_jobs)} duplicates={duplicate_count}")
 
         score_started = time.perf_counter()
-        enriched_jobs = enrich_jobs(unique_jobs, profile)
-        _stage_log("SCORE", score_started, f"scored={len(enriched_jobs)}")
+        enriched_jobs, avg_eval_score = enrich_jobs(unique_jobs, profile)
+        _stage_log("SCORE_TIME", score_started, "finished scoring")
+        logger.info(f"[SCORE] avg_score={avg_eval_score:.1f}")
 
         store_started = time.perf_counter()
         stored_jobs = store_jobs(enriched_jobs, repository)
-        _stage_log("STORE", store_started, f"stored={len(stored_jobs)}")
+        _stage_log("STORE_TIME", store_started, f"stored={len(stored_jobs)}")
 
         intelligence_started = time.perf_counter()
         intelligence_count = generate_intelligence(stored_jobs, repository, profile)
-        _stage_log("INTEL", intelligence_started, f"intelligence={intelligence_count}")
+        _stage_log("INTEL_TIME", intelligence_started, f"intelligence={intelligence_count}")
 
         logger.info(
             f"Processed {total_fetched} jobs -> {len(filtered_jobs)} relevant -> "
