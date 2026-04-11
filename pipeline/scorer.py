@@ -3,16 +3,12 @@ from typing import TYPE_CHECKING, Any, Dict
 
 from utils.logger import get_logger
 from utils.text_utils import contains_term, normalize_text
+from utils.matching_engine import build_match_data, get_profile_list
 
 if TYPE_CHECKING:
     from pipeline.models import Job
 
 logger = get_logger(__name__)
-
-TARGET_ROLES = ["backend", "python", "software engineer", "api", "microservices"]
-ROLE_EXCLUDE_TERMS = ["frontend", "react", "angular", "ui", "mobile", "ios", "android", "flutter"]
-BOOST_SKILLS = ["python", "backend", "aws"]
-ROLE_SKILL_SIGNALS = ["python", "backend", "api", "microservices", "aws", "fastapi", "django", "flask"]
 
 def get_job_age_hours(job: 'Job') -> float:
     try:
@@ -23,32 +19,11 @@ def get_job_age_hours(job: 'Job') -> float:
     except Exception:
         return 0.0
 
-
-def _normalized_terms(values) -> set[str]:
-    return {normalize_text(value) for value in values if normalize_text(value)}
-
-
-def _unique_terms(*term_groups: list[str]) -> list[str]:
-    seen = set()
-    ordered_terms = []
-    for group in term_groups:
-        for term in group:
-            normalized_term = normalize_text(term)
-            if not normalized_term or normalized_term in seen:
-                continue
-            seen.add(normalized_term)
-            ordered_terms.append(normalized_term)
-    return ordered_terms
-
-
-def _skill_signal_set(job: 'Job') -> set[str]:
-    detected_skills = _normalized_terms(getattr(job, "detected_skills", []) or [])
-    matched_skills = _normalized_terms(getattr(job, "skills", []) or [])
-    return detected_skills | matched_skills
-
 def calculate_skill_score(job: 'Job', profile: Dict[str, Any]) -> float:
     try:
-        skill_signals = _skill_signal_set(job)
+        matched_skills = set(job.match_data["matched_skills"])
+        detected_skills = set(getattr(job, "detected_skills", []) or [])
+        skill_signals = detected_skills | matched_skills
         if not skill_signals:
             return 0.0
 
@@ -90,31 +65,33 @@ def calculate_recency_score(job: 'Job') -> float:
 
 def calculate_role_score(job: 'Job', profile: Dict[str, Any]) -> float:
     try:
-        title = normalize_text(getattr(job, "title", ""))
-        job_text = normalize_text(f"{getattr(job, 'title', '')} {getattr(job, 'description', '')}")
-        skill_signals = _skill_signal_set(job)
-
-        role_exclusions = _unique_terms(ROLE_EXCLUDE_TERMS, profile.get("exclude_keywords", []))
-        if any(contains_term(title, term) for term in role_exclusions):
+        if job.match_data["excluded"]:
             return 0.0
 
-        target_roles = _unique_terms(
-            TARGET_ROLES,
-            profile.get("target_roles", []),
-            profile.get("preferred_roles", []),
-        )
+        title = normalize_text(getattr(job, "title", ""))
+        job_text = normalize_text(f"{getattr(job, 'title', '')} {getattr(job, 'description', '')}")
 
+        # If matching engine says False, strictly limit base role score.
+        if not job.match_data["role_match"]:
+            return 0.35
+
+        target_roles = get_profile_list(profile, "target_roles")
         if contains_term(title, "backend") or contains_term(title, "python"):
             return 1.0
-        if any(contains_term(title, term) for term in target_roles):
+        if any(term and contains_term(title, term) for term in target_roles):
             return 0.9
+            
+        matched_skills = set(job.match_data["matched_skills"])
+        detected_skills = set(getattr(job, "detected_skills", []) or [])
+        skill_signals = detected_skills | matched_skills
+        
         if contains_term(title, "software engineer") and skill_signals.intersection({"backend", "python", "api"}):
             return 0.85
-        if any(contains_term(job_text, term) for term in ["backend", "python", "api", "microservices"]):
+        if any(term and contains_term(job_text, term) for term in ["backend", "python", "api", "microservices"]):
             return 0.75
-        if skill_signals.intersection(ROLE_SKILL_SIGNALS):
-            return 0.65
-        return 0.35
+            
+        # Role matches, but implicitly via description fallback 
+        return 0.65
     except Exception as e:
         logger.exception(f"Error in role score: {e}")
         return 0.35
@@ -132,15 +109,18 @@ def calculate_bonus_score(job: 'Job') -> float:
     except Exception:
         return 0.0
 
-
-def calculate_focus_boost(job: 'Job') -> int:
+def calculate_focus_boost(job: 'Job', profile: Dict[str, Any]) -> int:
     try:
         searchable_text = normalize_text(
             f"{getattr(job, 'title', '')} {getattr(job, 'description', '')} {getattr(job, 'location', '')}"
         )
-        skill_signals = _skill_signal_set(job)
+        matched_skills = set(job.match_data["matched_skills"])
+        detected_skills = set(getattr(job, "detected_skills", []) or [])
+        skill_signals = detected_skills | matched_skills
+        
         boost = 0
-        for skill in BOOST_SKILLS:
+        bonus_skills = get_profile_list(profile, "bonus_keywords")
+        for skill in bonus_skills:
             if skill in skill_signals or contains_term(searchable_text, skill):
                 boost += 1
         return boost
@@ -149,11 +129,14 @@ def calculate_focus_boost(job: 'Job') -> int:
 
 def score_job(job: 'Job', profile: Dict[str, Any]) -> float:
     try:
+        # Guarantee match_data exists identical to filter.
+        build_match_data(job, profile)
+        
         skill_score = calculate_skill_score(job, profile)
         recency_score = calculate_recency_score(job)
         role_score = calculate_role_score(job, profile)
         bonus_score = calculate_bonus_score(job)
-        focus_boost = calculate_focus_boost(job)
+        focus_boost = calculate_focus_boost(job, profile)
 
         raw_score = (
             (skill_score * 0.5) +

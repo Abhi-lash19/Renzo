@@ -3,6 +3,7 @@ from typing import Any, Dict, List
 
 from utils.logger import get_logger
 from utils.text_utils import normalize_text
+from utils.matching_engine import DEFAULT_CONFIG
 
 logger = get_logger(__name__)
 
@@ -15,17 +16,15 @@ DEFAULT_KEYS = [
     "preferred_keywords",
     "projects",
     "experience",
+    "target_roles"
 ]
 
 FALLBACK_PROFILE = {
     "core_skills": ["python", "backend", "api", "aws", "sql"],
     "secondary_skills": ["docker", "fastapi", "microservices", "rest", "cloud"],
-    "preferred_roles": ["backend developer", "python developer", "software engineer"],
-    "exclude_keywords": ["senior", "lead", "principal", "staff", "frontend", "react", "angular"],
-    "bonus_keywords": ["startup", "saas", "product company", "high growth"],
-    "preferred_keywords": ["backend", "api", "microservices", "cloud", "aws"],
     "projects": ["api platform", "automation", "microservices", "analytics"],
     "experience": ["backend development", "cloud automation", "system integration"],
+    **DEFAULT_CONFIG
 }
 
 def _parse_value(value: str) -> List[str]:
@@ -47,15 +46,25 @@ def load_profile(file_path: str = "config/profile.txt") -> Dict[str, Any]:
 
     try:
         if path.exists():
+            current_key = None
             with path.open("r", encoding="utf-8") as profile_file:
                 for raw_line in profile_file:
                     line = raw_line.strip()
-                    if not line or line.startswith("#") or ":" not in line:
+                    if not line or line.startswith("#"):
                         continue
-                    key, value = line.split(":", 1)
-                    normalized_key = key.strip().lower()
-                    if normalized_key in profile:
-                        profile[normalized_key].extend(_parse_value(value))
+                        
+                    if ":" in line:
+                        key, value = line.split(":", 1)
+                        normalized_key = key.strip().lower()
+                        if normalized_key in profile or normalized_key == "target_roles":
+                            current_key = normalized_key
+                            if current_key not in profile:
+                                profile[current_key] = []
+                            if value.strip():
+                                profile[current_key].extend(_parse_value(value))
+                    elif current_key:
+                        profile[current_key].extend(_parse_value(line))
+                        
     except Exception as e:
         logger.exception(f"Error loading profile: {e}")
 
