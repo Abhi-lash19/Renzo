@@ -99,7 +99,7 @@ def build_match_data(job: "Job", profile: dict) -> dict:
         # -------------------------------
         # 1. SKILL MATCHING
         # -------------------------------
-        user_skills = set(profile.get("skills", []))
+        user_skills = set(profile.get("all_skills", []))
         matched_skills = set()
 
         for skill in user_skills:

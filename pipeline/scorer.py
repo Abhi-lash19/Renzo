@@ -129,8 +129,13 @@ def calculate_focus_boost(job: 'Job', profile: Dict[str, Any]) -> int:
 
 def score_job(job: 'Job', profile: Dict[str, Any]) -> float:
     try:
-        # Guarantee match_data exists identical to filter.
-        build_match_data(job, profile)
+        # SAFETY: match_data must already exist from filter stage
+        if not getattr(job, "match_data", None):
+            logger.error(
+                f"[SCORER_ERROR] Missing match_data before scoring "
+                f"job_id={getattr(job, 'job_id', 'unknown')}"
+            )
+            raise ValueError("match_data must be built before scoring")
         
         skill_score = calculate_skill_score(job, profile)
         recency_score = calculate_recency_score(job)

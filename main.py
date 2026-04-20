@@ -162,7 +162,18 @@ def enrich_jobs(jobs: List[Job], profile: dict) -> Tuple[List[Job], float]:
                 )
                 raise ValueError("match_data must be built before scoring")
 
+            logger.info(
+                f"[SCORER_INPUT] job_id={getattr(job, 'job_id', 'unknown')} "
+                f"match_data={getattr(job, 'match_data', {})}"
+            )
+
             score = score_job(job, profile)
+            logger.info(
+                f"[SCORER] job_id={getattr(job, 'job_id', 'unknown')} "
+                f"title={getattr(job, 'title', '')} "
+                f"score={score} "
+                f"breakdown={getattr(job, 'score_breakdown', {})}"
+            )
             total_score += score
             enriched_jobs.append(job)
 
