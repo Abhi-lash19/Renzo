@@ -1,9 +1,16 @@
+"""
+Job repository — all DB operations for job data.
+
+All access goes through DatabaseManager. No direct sqlite3.connect() calls.
+No manual conn.close() — connection lifecycle is centrally managed.
+"""
+
 import sqlite3
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, Iterable, List, TYPE_CHECKING
 
-from storage.db import get_connection
+from storage.db_manager import db_manager
 from utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -32,7 +39,9 @@ class JobRepository:
         if not job.job_id or not job.title or not job.company or not job.url:
             logger.warning(
                 f"Invalid job data, cannot store: job_id={job.job_id or 'missing'} "
-                f"title={job.title or 'missing'} company={job.company or 'missing'} url={job.url or 'missing'}"
+                f"title={job.title or 'missing'} company={job.company or 'missing'} url={job.url or 'missing'}",
+                extra={"component": "DB", "event": "insert_skip_invalid",
+                       "meta": {"job_id": job.job_id or "missing"}}
             )
             return False
 
@@ -60,53 +69,59 @@ class JobRepository:
             now_str,
         )
 
-        conn = None
         try:
-            conn = get_connection()
-            cursor = conn.cursor()
-            cursor.execute(query, params)
-            conn.commit()
-            if cursor.rowcount == 0:
-                logger.debug(f"DB insert skipped duplicate: {context}")
-                return False
-            logger.debug(f"DB insert succeeded: {context}")
-            return True
+            with db_manager.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, params)
+                conn.commit()
+                if cursor.rowcount == 0:
+                    logger.debug(
+                        f"DB insert skipped duplicate: {context}",
+                        extra={"component": "DB", "event": "insert_duplicate",
+                               "meta": {"job_id": job.job_id}}
+                    )
+                    return False
+                logger.debug(
+                    f"DB insert succeeded: {context}",
+                    extra={"component": "DB", "event": "insert_success",
+                           "meta": {"job_id": job.job_id}}
+                )
+                return True
         except sqlite3.IntegrityError as e:
-            logger.error(f"Database integrity error inserting job: {context} error={e}")
-            if conn:
-                conn.rollback()
+            logger.error(
+                f"Database integrity error inserting job: {context} error={e}",
+                extra={"component": "DB", "event": "insert_integrity_error",
+                       "meta": {"job_id": job.job_id, "error": str(e)}}
+            )
             return False
         except sqlite3.Error as e:
-            logger.error(f"Failed to insert job: {context} error={e}")
-            if conn:
-                conn.rollback()
+            logger.error(
+                f"Failed to insert job: {context} error={e}",
+                extra={"component": "DB", "event": "insert_error",
+                       "meta": {"job_id": job.job_id, "error": str(e)}}
+            )
             return False
-        finally:
-            if conn:
-                conn.close()
 
     def _replace_job_items(self, table: str, job_id: str, values: Iterable[str]) -> bool:
         clean_values = list(dict.fromkeys(value for value in values if value))
-        conn = None
         try:
-            conn = get_connection()
-            cursor = conn.cursor()
-            cursor.execute(f"DELETE FROM {table} WHERE job_id = ?", (job_id,))
-            if clean_values:
-                cursor.executemany(
-                    f"INSERT INTO {table} (job_id, skill) VALUES (?, ?)",
-                    [(job_id, value) for value in clean_values],
-                )
-            conn.commit()
-            return True
+            with db_manager.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(f"DELETE FROM {table} WHERE job_id = ?", (job_id,))
+                if clean_values:
+                    cursor.executemany(
+                        f"INSERT INTO {table} (job_id, skill) VALUES (?, ?)",
+                        [(job_id, value) for value in clean_values],
+                    )
+                conn.commit()
+                return True
         except sqlite3.Error as e:
-            logger.error(f"Failed to update {table} for job {job_id}: {e}")
-            if conn:
-                conn.rollback()
+            logger.error(
+                f"Failed to update {table} for job {job_id}: {e}",
+                extra={"component": "DB", "event": "replace_items_error",
+                       "meta": {"table": table, "job_id": job_id, "error": str(e)}}
+            )
             return False
-        finally:
-            if conn:
-                conn.close()
 
     def insert_skills(self, job_id: str, skills: Iterable[str]) -> bool:
         return self._replace_job_items("job_skills", job_id, skills)
@@ -118,79 +133,79 @@ class JobRepository:
         query = "INSERT OR IGNORE INTO job_hashes (hash, created_at) VALUES (?, ?)"
         params = (hash_value, datetime.utcnow().isoformat())
 
-        conn = None
         try:
-            conn = get_connection()
-            cursor = conn.cursor()
-            cursor.execute(query, params)
-            conn.commit()
-            inserted = cursor.rowcount == 1
-            if inserted:
-                return True
-            return self.hash_exists(hash_value)
+            with db_manager.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, params)
+                conn.commit()
+                inserted = cursor.rowcount == 1
+                if inserted:
+                    return True
+                return self.hash_exists(hash_value)
         except sqlite3.Error as e:
-            logger.warning(f"Failed to insert hash {hash_value[:16]}...: {e}")
-            if conn:
-                conn.rollback()
+            logger.warning(
+                f"Failed to insert hash {hash_value[:16]}...: {e}",
+                extra={"component": "DB", "event": "hash_insert_error",
+                       "meta": {"hash_prefix": hash_value[:16], "error": str(e)}}
+            )
             return False
-        finally:
-            if conn:
-                conn.close()
 
     def hash_exists(self, hash_value: str) -> bool:
-        conn = None
         try:
-            conn = get_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT 1 FROM job_hashes WHERE hash = ? LIMIT 1",
-                (hash_value,),
-            )
-            return cursor.fetchone() is not None
+            with db_manager.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT 1 FROM job_hashes WHERE hash = ? LIMIT 1",
+                    (hash_value,),
+                )
+                return cursor.fetchone() is not None
         except sqlite3.Error as e:
-            logger.error(f"Failed to check hash {hash_value[:16]}...: {e}")
+            logger.error(
+                f"Failed to check hash {hash_value[:16]}...: {e}",
+                extra={"component": "DB", "event": "hash_check_error",
+                       "meta": {"hash_prefix": hash_value[:16], "error": str(e)}}
+            )
             return False
-        finally:
-            if conn:
-                conn.close()
 
     def update_job_score(self, job_id: str, score: float) -> bool:
-        conn = None
         now_str = datetime.utcnow().isoformat()
         try:
-            conn = get_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE jobs SET score = ?, updated_at = ? WHERE id = ?",
-                (score, now_str, job_id),
-            )
-            conn.commit()
-            if cursor.rowcount == 0:
-                logger.error(f"Score update affected no rows for job {job_id}")
-                return False
-            return True
+            with db_manager.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE jobs SET score = ?, updated_at = ? WHERE id = ?",
+                    (score, now_str, job_id),
+                )
+                conn.commit()
+                if cursor.rowcount == 0:
+                    logger.error(
+                        f"Score update affected no rows for job {job_id}",
+                        extra={"component": "DB", "event": "score_update_miss",
+                               "meta": {"job_id": job_id}}
+                    )
+                    return False
+                return True
         except sqlite3.Error as e:
-            logger.error(f"Failed to update score for job {job_id}: {e}")
-            if conn:
-                conn.rollback()
+            logger.error(
+                f"Failed to update score for job {job_id}: {e}",
+                extra={"component": "DB", "event": "score_update_error",
+                       "meta": {"job_id": job_id, "error": str(e)}}
+            )
             return False
-        finally:
-            if conn:
-                conn.close()
 
     def _get_job_items(self, table: str, job_id: str) -> List[str]:
-        conn = None
         try:
-            conn = get_connection()
-            cursor = conn.cursor()
-            cursor.execute(f"SELECT skill FROM {table} WHERE job_id = ? ORDER BY skill ASC", (job_id,))
-            return [row[0] for row in cursor.fetchall()]
+            with db_manager.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(f"SELECT skill FROM {table} WHERE job_id = ? ORDER BY skill ASC", (job_id,))
+                return [row[0] for row in cursor.fetchall()]
         except sqlite3.Error as e:
-            logger.error(f"Failed to fetch {table} for job {job_id}: {e}")
+            logger.error(
+                f"Failed to fetch {table} for job {job_id}: {e}",
+                extra={"component": "DB", "event": "fetch_items_error",
+                       "meta": {"table": table, "job_id": job_id, "error": str(e)}}
+            )
             return []
-        finally:
-            if conn:
-                conn.close()
 
     def get_job_skills(self, job_id: str) -> List[str]:
         return self._get_job_items("job_skills", job_id)
@@ -202,66 +217,66 @@ class JobRepository:
         normalized_action = (action or "").strip().lower()
         if not job_id or normalized_action not in VALID_INTERACTIONS:
             logger.warning(
-                f"[INTERACTION_RECORD] invalid interaction job_id={job_id or 'missing'} action={action}"
+                f"[INTERACTION_RECORD] invalid interaction job_id={job_id or 'missing'} action={action}",
+                extra={"component": "DB", "event": "interaction_invalid",
+                       "meta": {"job_id": job_id or "missing", "action": action}}
             )
             return False
 
-        conn = None
         try:
-            conn = get_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO user_interactions (job_id, action, created_at)
-                VALUES (?, ?, ?)
-                """,
-                (job_id, normalized_action, datetime.utcnow().isoformat()),
-            )
-            conn.commit()
-            logger.info(
-                f"[INTERACTION_RECORD] job_id={job_id} action={normalized_action} recorded=True"
-            )
-            return True
+            with db_manager.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO user_interactions (job_id, action, created_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    (job_id, normalized_action, datetime.utcnow().isoformat()),
+                )
+                conn.commit()
+                logger.info(
+                    f"[INTERACTION_RECORD] job_id={job_id} action={normalized_action} recorded=True",
+                    extra={"component": "DB", "event": "interaction_recorded",
+                           "meta": {"job_id": job_id, "action": normalized_action}}
+                )
+                return True
         except sqlite3.Error as error:
             logger.error(
-                f"[INTERACTION_RECORD] job_id={job_id} action={normalized_action} error={error}"
+                f"[INTERACTION_RECORD] job_id={job_id} action={normalized_action} error={error}",
+                extra={"component": "DB", "event": "interaction_error",
+                       "meta": {"job_id": job_id, "action": normalized_action, "error": str(error)}}
             )
-            if conn:
-                conn.rollback()
             return False
-        finally:
-            if conn:
-                conn.close()
 
     def _get_job_skill_map(self, job_ids: List[str]) -> Dict[str, List[str]]:
         if not job_ids:
             return {}
 
         placeholders = ",".join("?" for _ in job_ids)
-        conn = None
         try:
-            conn = get_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                f"""
-                SELECT job_id, skill
-                FROM job_skills
-                WHERE job_id IN ({placeholders})
-                ORDER BY job_id ASC, skill ASC
-                """,
-                tuple(job_ids),
-            )
-            skill_map: Dict[str, List[str]] = defaultdict(list)
-            for job_id, skill in cursor.fetchall():
-                if skill:
-                    skill_map[job_id].append(skill)
-            return {job_id: list(dict.fromkeys(skills)) for job_id, skills in skill_map.items()}
+            with db_manager.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"""
+                    SELECT job_id, skill
+                    FROM job_skills
+                    WHERE job_id IN ({placeholders})
+                    ORDER BY job_id ASC, skill ASC
+                    """,
+                    tuple(job_ids),
+                )
+                skill_map: Dict[str, List[str]] = defaultdict(list)
+                for job_id, skill in cursor.fetchall():
+                    if skill:
+                        skill_map[job_id].append(skill)
+                return {job_id: list(dict.fromkeys(skills)) for job_id, skills in skill_map.items()}
         except sqlite3.Error as error:
-            logger.error(f"Failed to fetch skill map for interactions: {error}")
+            logger.error(
+                f"Failed to fetch skill map for interactions: {error}",
+                extra={"component": "DB", "event": "skill_map_error",
+                       "meta": {"error": str(error)}}
+            )
             return {}
-        finally:
-            if conn:
-                conn.close()
 
     def get_interaction_jobs(self, actions: Iterable[str] | None = None, limit: int = 200) -> List[Dict[str, object]]:
         normalized_actions = [
@@ -273,66 +288,70 @@ class JobRepository:
             return []
 
         placeholders = ",".join("?" for _ in normalized_actions)
-        conn = None
         try:
-            conn = get_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                f"""
-                SELECT ui.job_id, ui.action, ui.created_at, j.title, j.company, j.location, j.description
-                FROM user_interactions ui
-                JOIN jobs j ON j.id = ui.job_id
-                WHERE ui.action IN ({placeholders})
-                ORDER BY ui.created_at DESC
-                LIMIT ?
-                """,
-                (*normalized_actions, limit),
-            )
-            rows = cursor.fetchall()
-            job_ids = list(dict.fromkeys(row[0] for row in rows if row and row[0]))
-            skill_map = self._get_job_skill_map(job_ids)
+            with db_manager.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"""
+                    SELECT ui.job_id, ui.action, ui.created_at, j.title, j.company, j.location, j.description
+                    FROM user_interactions ui
+                    JOIN jobs j ON j.id = ui.job_id
+                    WHERE ui.action IN ({placeholders})
+                    ORDER BY ui.created_at DESC
+                    LIMIT ?
+                    """,
+                    (*normalized_actions, limit),
+                )
+                rows = cursor.fetchall()
+                job_ids = list(dict.fromkeys(row[0] for row in rows if row and row[0]))
+                skill_map = self._get_job_skill_map(job_ids)
 
-            snapshots: List[Dict[str, object]] = []
-            for row in rows:
-                job_id, action, created_at, title, company, location, description = row
-                snapshots.append({
-                    "job_id": job_id,
-                    "action": action,
-                    "created_at": created_at,
-                    "title": title or "",
-                    "company": company or "",
-                    "location": location or "",
-                    "description": description or "",
-                    "skills": list(skill_map.get(job_id, [])),
-                })
-            return snapshots
+                snapshots: List[Dict[str, object]] = []
+                for row in rows:
+                    job_id, action, created_at, title, company, location, description = row
+                    snapshots.append({
+                        "job_id": job_id,
+                        "action": action,
+                        "created_at": created_at,
+                        "title": title or "",
+                        "company": company or "",
+                        "location": location or "",
+                        "description": description or "",
+                        "skills": list(skill_map.get(job_id, [])),
+                    })
+                return snapshots
         except sqlite3.Error as error:
-            logger.error(f"Failed to fetch user interaction jobs: {error}")
+            logger.error(
+                f"Failed to fetch user interaction jobs: {error}",
+                extra={"component": "DB", "event": "interaction_jobs_error",
+                       "meta": {"error": str(error)}}
+            )
             return []
-        finally:
-            if conn:
-                conn.close()
 
     def get_top_jobs(self, limit: int = 30) -> List["Job"]:
         from pipeline.models import Job
 
-        conn = None
         try:
-            conn = get_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT id, title, company, location, description, url, source,
-                       posted_at, fetched_at, score, is_remote, is_startup
-                FROM jobs
-                ORDER BY score DESC
-                LIMIT ?
-                """,
-                (limit,),
-            )
-            rows = cursor.fetchall()
-            jobs = []
+            with db_manager.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT id, title, company, location, description, url, source,
+                           posted_at, fetched_at, score, is_remote, is_startup
+                    FROM jobs
+                    ORDER BY score DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                )
+                rows = cursor.fetchall()
 
+            # Batch-fetch skills for all jobs instead of N+1 queries
+            job_ids = [row[0] for row in rows if row[0]]
+            skill_map = self._get_job_skill_map(job_ids) if job_ids else {}
+            missing_map = self._get_missing_skill_map(job_ids) if job_ids else {}
+
+            jobs = []
             for row in rows:
                 job = Job(
                     job_id=row[0],
@@ -348,14 +367,51 @@ class JobRepository:
                 job.score = row[9]
                 job.is_remote = bool(row[10])
                 job.is_startup = bool(row[11])
-                job.skills = self.get_job_skills(job.job_id)
-                job.missing_skills = self.get_missing_skills(job.job_id)
+                job.skills = skill_map.get(job.job_id, [])
+                job.missing_skills = missing_map.get(job.job_id, [])
                 jobs.append(job)
 
+            logger.info(
+                f"[DB] Fetched top {len(jobs)} jobs",
+                extra={"component": "DB", "event": "top_jobs_fetched",
+                       "meta": {"count": len(jobs), "limit": limit}}
+            )
             return jobs
         except sqlite3.Error as e:
-            logger.error(f"Failed to get top jobs: {e}")
+            logger.error(
+                f"Failed to get top jobs: {e}",
+                extra={"component": "DB", "event": "top_jobs_error",
+                       "meta": {"error": str(e)}}
+            )
             return []
-        finally:
-            if conn:
-                conn.close()
+
+    def _get_missing_skill_map(self, job_ids: List[str]) -> Dict[str, List[str]]:
+        """Batch-fetch missing skills for multiple jobs (avoids N+1)."""
+        if not job_ids:
+            return {}
+
+        placeholders = ",".join("?" for _ in job_ids)
+        try:
+            with db_manager.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"""
+                    SELECT job_id, skill
+                    FROM missing_skills
+                    WHERE job_id IN ({placeholders})
+                    ORDER BY job_id ASC, skill ASC
+                    """,
+                    tuple(job_ids),
+                )
+                skill_map: Dict[str, List[str]] = defaultdict(list)
+                for job_id, skill in cursor.fetchall():
+                    if skill:
+                        skill_map[job_id].append(skill)
+                return {job_id: list(dict.fromkeys(skills)) for job_id, skills in skill_map.items()}
+        except sqlite3.Error as error:
+            logger.error(
+                f"Failed to fetch missing skill map: {error}",
+                extra={"component": "DB", "event": "missing_skill_map_error",
+                       "meta": {"error": str(error)}}
+            )
+            return {}

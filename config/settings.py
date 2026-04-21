@@ -34,6 +34,12 @@ class Settings:
     JOB_FETCH_LIMIT = int(os.getenv("JOB_FETCH_LIMIT", "500"))
     MAX_JOB_AGE_HOURS = int(os.getenv("MAX_JOB_AGE_HOURS", "6"))
 
+    # Database configs
+    DB_TYPE = os.getenv("DB_TYPE", "sqlite")              # "sqlite" | "postgres"
+    DB_PATH = os.getenv("DB_PATH", "data/jobs.db")        # SQLite file path
+    PG_DSN = os.getenv("PG_DSN", "")                      # Postgres DSN
+    LOG_FORMAT = os.getenv("LOG_FORMAT", "readable")       # "readable" | "json"
+
 
 settings = Settings()
 

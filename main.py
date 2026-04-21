@@ -449,6 +449,8 @@ def process_jobs(jobs: List[Job], repository: JobRepository, profile: dict) -> i
         return 0
 
 def main():
+    from storage.db_manager import db_manager
+
     try:
         init_db()
         profile = load_profile()
@@ -465,6 +467,8 @@ def main():
         logger.info("🎯 Pipeline completed")
     except Exception as e:
         logger.exception(f"Fatal error in main: {e}")
+    finally:
+        db_manager.shutdown()
 
 if __name__ == "__main__":
     main()
