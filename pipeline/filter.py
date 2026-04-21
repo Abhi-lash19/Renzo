@@ -1,83 +1,98 @@
-from datetime import datetime
 from typing import TYPE_CHECKING, Tuple
 
 from utils.logger import get_logger
-from utils.matching_engine import build_match_data
+from utils.matching_engine import apply_match_data, build_match_data
 
 if TYPE_CHECKING:
     from pipeline.models import Job
 
 logger = get_logger(__name__)
 
+DEFAULT_MIN_SKILL_THRESHOLD = 1.0
+FALLBACK_MIN_SKILL_THRESHOLD = 0.6
+STRONG_KEYWORD_THRESHOLD = 1.5
+STRONG_RECENCY_THRESHOLD = 0.7
 
-def get_job_age_hours(job: "Job") -> float:
-    try:
-        if not getattr(job, "posted_at", None):
-            return 0.0
-        now = datetime.utcnow()
-        posted_at = job.posted_at.replace(tzinfo=None) if job.posted_at.tzinfo else job.posted_at
-        return max((now - posted_at).total_seconds() / 3600.0, 0.0)
-    except Exception:
+
+def _skill_score_weighted(match_data: dict) -> float:
+    skill_score_raw = float(match_data.get("skill_score_raw", 0.0) or 0.0)
+    skill_max_score = float(match_data.get("skill_max_score", 0.0) or 0.0)
+    if skill_max_score <= 0.0:
         return 0.0
-
-
-def get_recency_score_filter(job: "Job") -> int:
-    age_hours = get_job_age_hours(job)
-    if age_hours <= 24:
-        return 2
-    if age_hours <= 72:
-        return 1
-    return 0
+    return min(skill_score_raw / skill_max_score, 1.0)
 
 
 def passes_filter(job: "Job", profile: dict, threshold: int = 4) -> Tuple[bool, str, float]:
     """
-    Returns (passed, reason, filter_score)
+    Returns (passed, reason, filter_score).
+
+    Filtering is match_data-driven and fails fast if match_data cannot be built.
     """
     try:
         if not getattr(job, "title", None) or not getattr(job, "description", None):
+            logger.info(
+                f"[FILTER_DECISION] job_id={getattr(job, 'job_id', 'unknown')} "
+                f"passed=False reason=missing_title_or_description filter_score=0.0"
+            )
             return False, "missing title/description", 0.0
 
-        # Run unified matching
-        build_match_data(job, profile)
-        match_data = job.match_data
+        match_data = getattr(job, "match_data", None) or build_match_data(job, profile)
+        if not match_data:
+            raise ValueError("match_data must exist before filtering")
 
-        # 1. Strict Exclusions Rule
-        if match_data.get("excluded", False):
-            return False, "excluded by rigid constraints", 0.0
+        apply_match_data(job, match_data)
 
-        # 2. Extract matching signals globally
-        role_match = match_data.get("role_match", False)
-        matched_skills = match_data.get("matched_skills", [])
-        skill_match_count = match_data.get("skill_overlap", 0)
-        strong_skill_match = skill_match_count >= 2
+        min_skill_threshold = DEFAULT_MIN_SKILL_THRESHOLD if threshold >= 4 else FALLBACK_MIN_SKILL_THRESHOLD
+        skill_score_raw = float(match_data.get("skill_score_raw", 0.0) or 0.0)
+        role_match_score = float(match_data.get("role_match_score", 0.0) or 0.0)
+        keyword_score = float(match_data.get("keyword_score", 0.0) or 0.0)
+        recency_score = float(match_data.get("recency_score", 0.0) or 0.0)
+        matched_skills = match_data.get("matched_skills", []) or []
+        excluded = bool(match_data.get("excluded", False))
 
-        # 3. Reject if neither role nor skills aligned
-        if not (role_match or strong_skill_match):
-            return False, "missing target role match and strong skill match", 0.0
+        skill_score_weighted = _skill_score_weighted(match_data)
+        filter_score = round(skill_score_weighted + role_match_score + keyword_score, 4)
 
-        # 4. Generate Signal Score
-        keyword_match_count = len(match_data.get("matched_keywords", []))
-        recency_score_val = get_recency_score_filter(job)
-
-        filter_score = (
-            (1 if role_match else 0) * 3 +
-            min(skill_match_count, 3) * 2 +
-            min(keyword_match_count, 3) +
-            recency_score_val
+        strong_skill_match = len(matched_skills) >= 2
+        base_pass = (
+            (skill_score_raw > min_skill_threshold)
+            or (role_match_score >= 0.5)
+            or strong_skill_match
+        )
+        boosted_pass = (
+            keyword_score >= STRONG_KEYWORD_THRESHOLD
+            and recency_score >= STRONG_RECENCY_THRESHOLD
+            and role_match_score >= 0.4
         )
 
-        logger.debug(
-            f"[FILTER_DEBUG] title={job.title[:40]} | "
-            f"role_match={role_match} skill_count={skill_match_count} "
-            f"keyword_count={keyword_match_count} recency={recency_score_val} "
-            f"filter_score={filter_score}"
+        if excluded:
+            reason = "excluded by rigid constraints"
+            passed = False
+        elif role_match_score == 0.0 and skill_score_raw <= min_skill_threshold and not strong_skill_match:
+            reason = "role mismatch and weak skill evidence"
+            passed = False
+        elif base_pass or boosted_pass:
+            if boosted_pass and not base_pass:
+                reason = "passed via keyword and recency boost"
+            elif role_match_score >= 0.5:
+                reason = "passed via role match confidence"
+            elif strong_skill_match:
+                reason = "passed via strong matched skill overlap"
+            else:
+                reason = "passed via weighted skill threshold"
+            passed = True
+        else:
+            reason = "insufficient match_data evidence"
+            passed = False
+
+        logger.info(
+            f"[FILTER_DECISION] job_id={getattr(job, 'job_id', 'unknown')} "
+            f"passed={passed} reason={reason} filter_score={filter_score} "
+            f"skill_score_raw={skill_score_raw} role_match_score={role_match_score} "
+            f"keyword_score={keyword_score} recency_score={recency_score} "
+            f"matched_skills={matched_skills}"
         )
-
-        if filter_score >= threshold:
-            return True, f"passed (score {filter_score})", float(filter_score)
-
-        return False, f"score {filter_score} below threshold {threshold}", float(filter_score)
-    except Exception as e:
-        logger.exception(f"Error filtering job: {e}")
+        return passed, reason, filter_score
+    except Exception as error:
+        logger.exception(f"Error filtering job: {error}")
         return False, "fatal error during filtering", 0.0

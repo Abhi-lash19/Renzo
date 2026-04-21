@@ -7,8 +7,14 @@ logger = get_logger(__name__)
 
 def generate_insight(job, profile: Dict[str, Any]) -> Dict[str, object]:
     try:
-        matched_skills = getattr(job, "skills", [])
-        missing_skills = getattr(job, "missing_skills", [])
+        # Use match_data as primary source for improved matched_skills
+        match_data = getattr(job, "match_data", None)
+        if match_data:
+            matched_skills = match_data.get("matched_skills", [])
+            missing_skills = match_data.get("missing_skills", [])
+        else:
+            matched_skills = getattr(job, "skills", [])
+            missing_skills = getattr(job, "missing_skills", [])
         project_suggestions = map_projects(job, profile)
 
         if matched_skills:

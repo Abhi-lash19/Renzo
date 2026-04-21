@@ -59,7 +59,10 @@ def apply_migrations(conn):
         ("idx_jobs_score", "jobs(score)"),
         ("idx_jobs_status", "jobs(status)"),
         ("idx_job_skills_job_id", "job_skills(job_id)"),
-        ("idx_missing_skills_job_id", "missing_skills(job_id)")
+        ("idx_missing_skills_job_id", "missing_skills(job_id)"),
+        ("idx_user_interactions_job_id", "user_interactions(job_id)"),
+        ("idx_user_interactions_action", "user_interactions(action)"),
+        ("idx_user_interactions_created_at", "user_interactions(created_at)")
     ]
     
     for idx_name, idx_def in indexes:
@@ -135,6 +138,16 @@ def init_db():
         )
         """)
         logger.debug("[DB] Table 'job_hashes' ensured")
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_interactions (
+            job_id TEXT NOT NULL,
+            action TEXT NOT NULL CHECK(action IN ('viewed', 'applied', 'ignored')),
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+        )
+        """)
+        logger.debug("[DB] Table 'user_interactions' ensured")
         
         apply_migrations(conn)
 

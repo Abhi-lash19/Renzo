@@ -1,6 +1,7 @@
 import sqlite3
+from collections import defaultdict
 from datetime import datetime
-from typing import Iterable, List, TYPE_CHECKING
+from typing import Dict, Iterable, List, TYPE_CHECKING
 
 from storage.db import get_connection
 from utils.logger import get_logger
@@ -9,6 +10,7 @@ if TYPE_CHECKING:
     from pipeline.models import Job
 
 logger = get_logger(__name__)
+VALID_INTERACTIONS = {"viewed", "applied", "ignored"}
 
 
 class JobRepository:
@@ -195,6 +197,121 @@ class JobRepository:
 
     def get_missing_skills(self, job_id: str) -> List[str]:
         return self._get_job_items("missing_skills", job_id)
+
+    def record_interaction(self, job_id: str, action: str) -> bool:
+        normalized_action = (action or "").strip().lower()
+        if not job_id or normalized_action not in VALID_INTERACTIONS:
+            logger.warning(
+                f"[INTERACTION_RECORD] invalid interaction job_id={job_id or 'missing'} action={action}"
+            )
+            return False
+
+        conn = None
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO user_interactions (job_id, action, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (job_id, normalized_action, datetime.utcnow().isoformat()),
+            )
+            conn.commit()
+            logger.info(
+                f"[INTERACTION_RECORD] job_id={job_id} action={normalized_action} recorded=True"
+            )
+            return True
+        except sqlite3.Error as error:
+            logger.error(
+                f"[INTERACTION_RECORD] job_id={job_id} action={normalized_action} error={error}"
+            )
+            if conn:
+                conn.rollback()
+            return False
+        finally:
+            if conn:
+                conn.close()
+
+    def _get_job_skill_map(self, job_ids: List[str]) -> Dict[str, List[str]]:
+        if not job_ids:
+            return {}
+
+        placeholders = ",".join("?" for _ in job_ids)
+        conn = None
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
+                SELECT job_id, skill
+                FROM job_skills
+                WHERE job_id IN ({placeholders})
+                ORDER BY job_id ASC, skill ASC
+                """,
+                tuple(job_ids),
+            )
+            skill_map: Dict[str, List[str]] = defaultdict(list)
+            for job_id, skill in cursor.fetchall():
+                if skill:
+                    skill_map[job_id].append(skill)
+            return {job_id: list(dict.fromkeys(skills)) for job_id, skills in skill_map.items()}
+        except sqlite3.Error as error:
+            logger.error(f"Failed to fetch skill map for interactions: {error}")
+            return {}
+        finally:
+            if conn:
+                conn.close()
+
+    def get_interaction_jobs(self, actions: Iterable[str] | None = None, limit: int = 200) -> List[Dict[str, object]]:
+        normalized_actions = [
+            action.strip().lower()
+            for action in (actions or VALID_INTERACTIONS)
+            if action and action.strip().lower() in VALID_INTERACTIONS
+        ]
+        if not normalized_actions:
+            return []
+
+        placeholders = ",".join("?" for _ in normalized_actions)
+        conn = None
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
+                SELECT ui.job_id, ui.action, ui.created_at, j.title, j.company, j.location, j.description
+                FROM user_interactions ui
+                JOIN jobs j ON j.id = ui.job_id
+                WHERE ui.action IN ({placeholders})
+                ORDER BY ui.created_at DESC
+                LIMIT ?
+                """,
+                (*normalized_actions, limit),
+            )
+            rows = cursor.fetchall()
+            job_ids = list(dict.fromkeys(row[0] for row in rows if row and row[0]))
+            skill_map = self._get_job_skill_map(job_ids)
+
+            snapshots: List[Dict[str, object]] = []
+            for row in rows:
+                job_id, action, created_at, title, company, location, description = row
+                snapshots.append({
+                    "job_id": job_id,
+                    "action": action,
+                    "created_at": created_at,
+                    "title": title or "",
+                    "company": company or "",
+                    "location": location or "",
+                    "description": description or "",
+                    "skills": list(skill_map.get(job_id, [])),
+                })
+            return snapshots
+        except sqlite3.Error as error:
+            logger.error(f"Failed to fetch user interaction jobs: {error}")
+            return []
+        finally:
+            if conn:
+                conn.close()
 
     def get_top_jobs(self, limit: int = 30) -> List["Job"]:
         from pipeline.models import Job

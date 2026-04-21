@@ -8,6 +8,7 @@ from config.settings import settings
 from fetchers.adzuna_api import AdzunaFetcher
 from fetchers.indeed_rss import IndeedRSSFetcher
 from fetchers.remotive_api import RemotiveFetcher
+from intelligence.feedback_loop import attach_user_preferences, get_user_preferences
 from intelligence.resume_enhancer import generate_insight
 from intelligence.skill_gap import compute_skill_gap
 from pipeline.deduplicate import is_duplicate
@@ -17,6 +18,7 @@ from pipeline.scorer import score_job
 from storage.db import init_db
 from storage.repository import JobRepository
 from utils.logger import get_logger
+from utils.matching_engine import build_match_data
 from utils.profile_loader import load_profile
 
 logger = get_logger(__name__)
@@ -61,13 +63,51 @@ def fetch_all_jobs() -> List[Job]:
         logger.error("❌ CRITICAL: No jobs fetched from any source")
     return all_jobs
 
+def load_learning_preferences(repository: JobRepository, profile: dict) -> dict:
+    preferences = get_user_preferences(repository, profile)
+    attach_user_preferences(profile, preferences)
+    logger.info(
+        f"[LEARNING_LOAD] applied={preferences.get('applied_jobs_count', 0)} "
+        f"ignored={preferences.get('ignored_jobs_count', 0)} "
+        f"preferred_skills={preferences.get('preferred_skills', [])[:5]}"
+    )
+    return preferences
+
+
+def refresh_learning_preferences(repository: JobRepository, profile: dict) -> dict:
+    preferences = get_user_preferences(repository, profile)
+    attach_user_preferences(profile, preferences)
+    logger.info(
+        f"[LEARNING_REFRESH] applied={preferences.get('applied_jobs_count', 0)} "
+        f"ignored={preferences.get('ignored_jobs_count', 0)} "
+        f"preferred_roles={preferences.get('preferred_roles', [])[:5]}"
+    )
+    return preferences
+
+
+def prepare_jobs_with_match_data(jobs: List[Job], profile: dict) -> List[Job]:
+    prepared_jobs: List[Job] = []
+    for job in jobs[: settings.JOB_FETCH_LIMIT]:
+        try:
+            match_data = build_match_data(job, profile)
+            if not match_data:
+                raise ValueError("match_data must be built before filtering")
+            prepared_jobs.append(job)
+        except Exception as error:
+            logger.exception(
+                f"[PIPELINE_ERROR] Failed to build match_data "
+                f"job_id={getattr(job, 'job_id', 'unknown')} title={getattr(job, 'title', '')}: {error}"
+            )
+    return prepared_jobs
+
+
 def filter_jobs(jobs: List[Job], profile: dict, fallback: bool = False) -> Tuple[List[Job], int, float]:
     accepted_jobs: List[Job] = []
     filtered_count = 0
     total_score = 0.0
     
     threshold = 3 if fallback else 4
-    limit_jobs = jobs[: settings.JOB_FETCH_LIMIT]
+    limit_jobs = jobs
 
     for job in limit_jobs:
         try:
@@ -129,6 +169,8 @@ def store_jobs(jobs: List[Job], repository: JobRepository) -> List[Job]:
             if not job.job_id:
                 logger.warning(f"Skipping job with missing ID: {job.title}")
                 continue
+            if not getattr(job, "match_data", None):
+                raise ValueError("match_data must exist before storing")
 
             # Ensure globally unique job_id (CRITICAL FIX)
             job.job_id = f"{job.source}_{job.job_id}"
@@ -191,6 +233,8 @@ def generate_intelligence(jobs: List[Job], repository: JobRepository, profile: d
     intelligence_count = 0
     for job in jobs:
         try:
+            if not getattr(job, "match_data", None):
+                raise ValueError("match_data must exist before intelligence generation")
             compute_skill_gap(job, profile)
             job.insight = generate_insight(job, profile)
             skills_saved = repository.insert_skills(job.job_id, job.skills)
@@ -359,8 +403,16 @@ def process_jobs(jobs: List[Job], repository: JobRepository, profile: dict) -> i
         return 0
 
     try:
+        learning_started = time.perf_counter()
+        load_learning_preferences(repository, profile)
+        _stage_log("LEARNING_LOAD_TIME", learning_started, "loaded user preferences")
+
+        match_started = time.perf_counter()
+        prepared_jobs = prepare_jobs_with_match_data(jobs, profile)
+        _stage_log("MATCH_TIME", match_started, f"prepared={len(prepared_jobs)} jobs with match_data")
+
         filter_started = time.perf_counter()
-        filtered_jobs, filtered_count, avg_filter_score = filter_jobs(jobs, profile)
+        filtered_jobs, filtered_count, avg_filter_score = filter_jobs(prepared_jobs, profile)
         _stage_log("FILTER_TIME", filter_started, "finished filtering")
         logger.info(f"[FILTER] total={total_fetched} accepted={len(filtered_jobs)} rejected={filtered_count} avg_score={avg_filter_score:.1f}")
 
@@ -382,9 +434,14 @@ def process_jobs(jobs: List[Job], repository: JobRepository, profile: dict) -> i
         intelligence_count = generate_intelligence(stored_jobs, repository, profile)
         _stage_log("INTEL_TIME", intelligence_started, f"intelligence={intelligence_count}")
 
+        learning_refresh_started = time.perf_counter()
+        refresh_learning_preferences(repository, profile)
+        _stage_log("LEARNING_UPDATE_TIME", learning_refresh_started, "refreshed learning state")
+
         logger.info(
             f"Processed {total_fetched} jobs -> {len(filtered_jobs)} relevant -> "
-            f"{len(unique_jobs)} unique -> {len(stored_jobs)} stored -> {intelligence_count} intelligent"
+            f"{len(unique_jobs)} unique -> {len(stored_jobs)} stored -> "
+            f"{intelligence_count} intelligent -> learning refreshed"
         )
         return len(stored_jobs)
     except Exception as e:

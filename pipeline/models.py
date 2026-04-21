@@ -29,6 +29,7 @@ class Job:
 
         self.skills: List[str] = []
         self.detected_skills: List[str] = []
+        self.match_data: dict = {}
         self.score: float = 0.0
         self.score_breakdown: dict = {}
         self.is_remote: bool = False
