@@ -40,6 +40,18 @@ class Settings:
     PG_DSN = os.getenv("PG_DSN", "")                      # Postgres DSN
     LOG_FORMAT = os.getenv("LOG_FORMAT", "readable")       # "readable" | "json"
 
+    # Supabase / Auth
+    SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+    SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+    SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
+    SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "")
+
+    # Auth gate — set to "true" to enforce JWT on all non-health endpoints
+    AUTH_ENABLED = os.getenv("AUTH_ENABLED", "false").lower() == "true"
+
+    # DB backend alias (mirrors DB_TYPE for clarity in Phase 3+)
+    DB_BACKEND = os.getenv("DB_BACKEND", os.getenv("DB_TYPE", "sqlite")).lower()
+
 
 settings = Settings()
 
