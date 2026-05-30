@@ -417,3 +417,116 @@ class JobRepository:
                        "meta": {"error": str(error)}}
             )
             return {}
+
+    # -----------------------------------------------------------------------
+    # Job run queue
+    # -----------------------------------------------------------------------
+
+    _VALID_RUN_STATUSES = {"queued", "running", "complete", "failed"}
+
+    def create_job_run(self, run_id: str) -> bool:
+        """Insert a new job run with status='queued'. Returns False if run_id already exists."""
+        query = """
+            INSERT OR IGNORE INTO job_runs (run_id, status, created_at)
+            VALUES (?, 'queued', ?)
+        """
+        try:
+            with db_manager.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, (run_id, datetime.utcnow().isoformat()))
+                conn.commit()
+                inserted = cursor.rowcount == 1
+                logger.debug(
+                    f"[JOB_RUN] create run_id={run_id} inserted={inserted}",
+                    extra={"component": "DB", "event": "job_run_create",
+                           "meta": {"run_id": run_id, "inserted": inserted}}
+                )
+                return inserted
+        except sqlite3.Error as e:
+            logger.error(
+                f"[JOB_RUN] Failed to create run run_id={run_id}: {e}",
+                extra={"component": "DB", "event": "job_run_create_error",
+                       "meta": {"run_id": run_id, "error": str(e)}}
+            )
+            return False
+
+    def update_run_status(
+        self,
+        run_id: str,
+        status: str,
+        started_at: str | None = None,
+        completed_at: str | None = None,
+        result_json: str | None = None,
+    ) -> bool:
+        """Update status and optional timestamps/result. Returns False if not found or invalid status."""
+        if status not in self._VALID_RUN_STATUSES:
+            logger.warning(
+                f"[JOB_RUN] Invalid status={status} for run_id={run_id}",
+                extra={"component": "DB", "event": "job_run_invalid_status",
+                       "meta": {"run_id": run_id, "status": status}}
+            )
+            return False
+
+        query = """
+            UPDATE job_runs
+            SET status = ?,
+                started_at = COALESCE(?, started_at),
+                completed_at = COALESCE(?, completed_at),
+                result_json = COALESCE(?, result_json)
+            WHERE run_id = ?
+        """
+        try:
+            with db_manager.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, (status, started_at, completed_at, result_json, run_id))
+                conn.commit()
+                if cursor.rowcount == 0:
+                    logger.warning(
+                        f"[JOB_RUN] No row updated for run_id={run_id}",
+                        extra={"component": "DB", "event": "job_run_update_miss",
+                               "meta": {"run_id": run_id}}
+                    )
+                    return False
+                logger.debug(
+                    f"[JOB_RUN] updated run_id={run_id} status={status}",
+                    extra={"component": "DB", "event": "job_run_updated",
+                           "meta": {"run_id": run_id, "status": status}}
+                )
+                return True
+        except sqlite3.Error as e:
+            logger.error(
+                f"[JOB_RUN] Failed to update run_id={run_id}: {e}",
+                extra={"component": "DB", "event": "job_run_update_error",
+                       "meta": {"run_id": run_id, "error": str(e)}}
+            )
+            return False
+
+    def get_job_run(self, run_id: str) -> dict | None:
+        """Fetch a job run row by run_id. Returns None if not found."""
+        query = """
+            SELECT run_id, status, created_at, started_at, completed_at, result_json
+            FROM job_runs
+            WHERE run_id = ?
+        """
+        try:
+            with db_manager.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, (run_id,))
+                row = cursor.fetchone()
+                if row is None:
+                    return None
+                return {
+                    "run_id": row[0],
+                    "status": row[1],
+                    "created_at": row[2],
+                    "started_at": row[3],
+                    "completed_at": row[4],
+                    "result_json": row[5],
+                }
+        except sqlite3.Error as e:
+            logger.error(
+                f"[JOB_RUN] Failed to fetch run_id={run_id}: {e}",
+                extra={"component": "DB", "event": "job_run_fetch_error",
+                       "meta": {"run_id": run_id, "error": str(e)}}
+            )
+            return None
