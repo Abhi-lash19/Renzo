@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1.endpoints import health
+from app.api.v1.endpoints import health, jobs
 from storage.db import init_db
 from storage.db_manager import db_manager
 
@@ -30,3 +30,4 @@ app.add_middleware(
 )
 
 app.include_router(health.router, prefix="/v1", tags=["health"])
+app.include_router(jobs.router, prefix="/v1", tags=["jobs"])
