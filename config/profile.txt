@@ -69,7 +69,7 @@ startup, early stage, high growth, saas, cloud native
 # LOCATION
 # =========================
 location:
-india, Pune, Hyderabad, Nodia, remote
+india, Pune, Hyderabad, Noida, remote
 
 remote_preferred:
 true
