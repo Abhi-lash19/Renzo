@@ -10,6 +10,7 @@ Responsibilities:
 Pipeline orchestration lives in pipeline/orchestrator.py.
 """
 
+import argparse
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -175,10 +176,36 @@ def export_outputs(repository: JobRepository, profile: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    from storage.db_manager import db_manager
+    parser = argparse.ArgumentParser(
+        prog="renzo",
+        description="Renzo — Personal Job Intelligence Engine",
+    )
+    parser.add_argument(
+        "--run",
+        action="store_true",
+        help="Run the full job pipeline (default if no flag given)",
+    )
+    parser.add_argument(
+        "--feedback",
+        nargs=2,
+        metavar=("JOB_ID", "ACTION"),
+        help="Record user feedback. ACTION must be: applied | ignored | viewed",
+    )
+    args = parser.parse_args()
 
+    from storage.db_manager import db_manager
     try:
         init_db()
+
+        if args.feedback:
+            job_id, action = args.feedback
+            repository = JobRepository()
+            success = repository.record_interaction(job_id, action)
+            status = "OK" if success else "FAILED"
+            print(f"[feedback] {job_id} -> {action}: {status}")
+            return
+
+        # Default: run full pipeline (--run or no flag)
         profile = load_profile()
         jobs = fetch_all_jobs()
         if not jobs:
