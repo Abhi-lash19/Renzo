@@ -105,7 +105,8 @@ def export_outputs(repository: JobRepository, profile: dict) -> None:
         OUTPUT_DIR.mkdir(exist_ok=True)
 
         for job in top_jobs:
-            job.insight = generate_insight(job, profile)
+            if not getattr(job, "insight", None):
+                job.insight = generate_insight(job, profile)
 
         (OUTPUT_DIR / "top_jobs.json").write_text(
             json.dumps([_job_to_dict(job) for job in top_jobs], indent=2),
