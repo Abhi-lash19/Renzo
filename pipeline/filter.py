@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Tuple
 
 from config.settings import settings
@@ -44,8 +44,12 @@ def passes_filter(job: "Job", profile: dict, threshold: int = 4) -> Tuple[bool, 
         # Jobs without a posted_at timestamp are not rejected — we cannot determine their age.
         posted_at = getattr(job, "posted_at", None)
         if posted_at is not None:
-            clean_posted_at = posted_at.replace(tzinfo=None) if posted_at.tzinfo else posted_at
-            age_hours = (datetime.utcnow() - clean_posted_at).total_seconds() / 3600.0
+            if posted_at.tzinfo is not None:
+                # Convert to UTC then strip tzinfo so comparison with utcnow() is safe
+                utc_posted_at = posted_at.astimezone(timezone.utc).replace(tzinfo=None)
+            else:
+                utc_posted_at = posted_at
+            age_hours = (datetime.utcnow() - utc_posted_at).total_seconds() / 3600.0
             if age_hours > settings.MAX_JOB_AGE_HOURS:
                 logger.info(
                     f"[FILTER_DECISION] job_id={getattr(job, 'job_id', 'unknown')} "
