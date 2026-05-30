@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
+from app.auth import get_current_user
 from app.dependencies import get_profile, get_repository
 from app.schemas.job import JobItemResponse, RunDetailResponse, RunResponse
 from pipeline.orchestrator import fetch_all_jobs, process_jobs
@@ -56,15 +57,21 @@ def run_job_finder(
     background_tasks: BackgroundTasks,
     repository: JobRepository = Depends(get_repository),
     profile: dict = Depends(get_profile),
+    current_user: dict = Depends(get_current_user),
 ):
     run_id = str(uuid.uuid4())
-    repository.create_job_run(run_id)
+    user_id = current_user.get("sub") or current_user.get("id", "")
+    repository.create_job_run(run_id, user_id=user_id)
     background_tasks.add_task(_execute_pipeline_run, run_id, repository, profile)
     return RunResponse(run_id=run_id, status="queued")
 
 
 @router.get("/runs/{run_id}", response_model=RunDetailResponse)
-def get_run(run_id: str, repository: JobRepository = Depends(get_repository)):
+def get_run(
+    run_id: str,
+    repository: JobRepository = Depends(get_repository),
+    current_user: dict = Depends(get_current_user),
+):
     run = repository.get_job_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")

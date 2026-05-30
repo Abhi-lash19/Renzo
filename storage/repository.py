@@ -425,16 +425,37 @@ class JobRepository:
 
     _VALID_RUN_STATUSES = {"queued", "running", "complete", "failed"}
 
-    def create_job_run(self, run_id: str) -> bool:
-        """Insert a new job run with status='queued'. Returns False if run_id already exists."""
-        query = """
-            INSERT OR IGNORE INTO job_runs (run_id, status, created_at)
-            VALUES (?, 'queued', ?)
-        """
+    def create_job_run(self, run_id: str, user_id: str | None = None) -> bool:
+        """Insert a new job run with status='queued'. Returns False if run_id already exists.
+        user_id is stored when DB_BACKEND=postgres."""
+        from config.settings import settings
+        is_postgres = settings.DB_BACKEND == "postgres"
+
+        if is_postgres and user_id:
+            query = """
+                INSERT INTO job_runs (run_id, status, created_at, user_id)
+                VALUES (?, 'queued', ?, ?)
+                ON CONFLICT (run_id) DO NOTHING
+            """
+            params = (run_id, datetime.utcnow().isoformat(), user_id)
+        elif is_postgres:
+            query = """
+                INSERT INTO job_runs (run_id, status, created_at)
+                VALUES (?, 'queued', ?)
+                ON CONFLICT (run_id) DO NOTHING
+            """
+            params = (run_id, datetime.utcnow().isoformat())
+        else:
+            query = """
+                INSERT OR IGNORE INTO job_runs (run_id, status, created_at)
+                VALUES (?, 'queued', ?)
+            """
+            params = (run_id, datetime.utcnow().isoformat())
+
         try:
             with db_manager.connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(query, (run_id, datetime.utcnow().isoformat()))
+                cursor.execute(query, params)
                 conn.commit()
                 inserted = cursor.rowcount == 1
                 logger.debug(

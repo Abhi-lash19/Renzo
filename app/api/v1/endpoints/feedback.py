@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends
 
+from app.auth import get_current_user
 from app.dependencies import get_repository
 from app.schemas.feedback import FeedbackRequest, FeedbackResponse
 from storage.repository import JobRepository
@@ -11,6 +12,7 @@ router = APIRouter()
 def record_feedback(
     body: FeedbackRequest,
     repository: JobRepository = Depends(get_repository),
+    current_user: dict = Depends(get_current_user),
 ):
     recorded = repository.record_interaction(body.job_id, body.action)
     return FeedbackResponse(recorded=recorded)
