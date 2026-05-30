@@ -12,18 +12,12 @@ Pipeline orchestration lives in pipeline/orchestrator.py.
 
 import argparse
 import json
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List
 
-from config.settings import settings
-from fetchers.adzuna_api import AdzunaFetcher
-from fetchers.indeed_rss import IndeedRSSFetcher
-from fetchers.remotive_api import RemotiveFetcher
 from intelligence.resume_enhancer import generate_insight
 from pipeline.models import Job
-from pipeline.orchestrator import process_jobs
+from pipeline.orchestrator import fetch_all_jobs, process_jobs
 from storage.db import init_db
 from storage.repository import JobRepository
 from utils.logger import get_logger
@@ -31,49 +25,6 @@ from utils.profile_loader import load_profile
 
 logger = get_logger(__name__)
 OUTPUT_DIR = Path("output")
-
-
-# ---------------------------------------------------------------------------
-# Fetching
-# ---------------------------------------------------------------------------
-
-def fetch_all_jobs() -> List[Job]:
-    """Fetch jobs from all sources concurrently."""
-    sources = [
-        IndeedRSSFetcher(),
-        AdzunaFetcher(),
-        RemotiveFetcher(),
-    ]
-
-    all_jobs: List[Job] = []
-
-    try:
-        with ThreadPoolExecutor(max_workers=settings.MAX_WORKERS) as executor:
-            future_to_source = {
-                executor.submit(source.fetch_and_normalize): (
-                    source.__class__.__name__,
-                    time.perf_counter(),
-                )
-                for source in sources
-            }
-            for future in as_completed(future_to_source):
-                source_name, source_started = future_to_source[future]
-                try:
-                    jobs = future.result()
-                    elapsed = time.perf_counter() - source_started
-                    logger.info(
-                        f"✅ {source_name}: {len(jobs)} jobs fetched in {elapsed:.2f}s"
-                    )
-                    all_jobs.extend(jobs)
-                except Exception as e:
-                    logger.exception(f"❌ {source_name} failed: {e}")
-    except Exception as e:
-        logger.exception(f"Threadpool error: {e}")
-
-    logger.info(f"📥 Total fetched across all sources: {len(all_jobs)} jobs")
-    if not all_jobs:
-        logger.error("❌ CRITICAL: No jobs fetched from any source")
-    return all_jobs
 
 
 # ---------------------------------------------------------------------------

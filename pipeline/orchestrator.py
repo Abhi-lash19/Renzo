@@ -15,9 +15,13 @@ Entry point: process_jobs(jobs, repository, profile) -> int (count stored)
 """
 
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Tuple
 
 from config.settings import settings
+from fetchers.adzuna_api import AdzunaFetcher
+from fetchers.indeed_rss import IndeedRSSFetcher
+from fetchers.remotive_api import RemotiveFetcher
 from intelligence.feedback_loop import attach_user_preferences, get_user_preferences
 from intelligence.resume_enhancer import generate_insight
 from intelligence.skill_gap import compute_skill_gap
@@ -342,3 +346,39 @@ def process_jobs(jobs: List[Job], repository: JobRepository, profile: dict) -> i
     except Exception as e:
         logger.exception(f"Fatal error in process_jobs: {e}")
         return 0
+
+
+# ---------------------------------------------------------------------------
+# Fetching
+# ---------------------------------------------------------------------------
+
+def fetch_all_jobs() -> List[Job]:
+    """Fetch jobs from all sources concurrently."""
+    sources = [IndeedRSSFetcher(), AdzunaFetcher(), RemotiveFetcher()]
+    all_jobs: List[Job] = []
+    try:
+        with ThreadPoolExecutor(max_workers=settings.MAX_WORKERS) as executor:
+            future_to_source = {
+                executor.submit(source.fetch_and_normalize): (
+                    source.__class__.__name__,
+                    time.perf_counter(),
+                )
+                for source in sources
+            }
+            for future in as_completed(future_to_source):
+                source_name, source_started = future_to_source[future]
+                try:
+                    jobs = future.result()
+                    elapsed = time.perf_counter() - source_started
+                    logger.info(
+                        f"✅ {source_name}: {len(jobs)} jobs fetched in {elapsed:.2f}s"
+                    )
+                    all_jobs.extend(jobs)
+                except Exception as e:
+                    logger.exception(f"❌ {source_name} failed: {e}")
+    except Exception as e:
+        logger.exception(f"Threadpool error: {e}")
+    logger.info(f"📥 Total fetched across all sources: {len(all_jobs)} jobs")
+    if not all_jobs:
+        logger.error("❌ CRITICAL: No jobs fetched from any source")
+    return all_jobs
