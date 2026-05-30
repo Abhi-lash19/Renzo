@@ -49,8 +49,8 @@ class JobRepository:
         query = """
             INSERT OR IGNORE INTO jobs (
                 id, title, company, location, description, url, source,
-                posted_at, fetched_at, score, is_remote, is_startup, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                posted_at, fetched_at, score, is_remote, is_startup, updated_at, match_type
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         now_str = datetime.utcnow().isoformat()
         params = (
@@ -67,6 +67,7 @@ class JobRepository:
             int(job.is_remote),
             int(job.is_startup),
             now_str,
+            getattr(job, "match_type", ""),
         )
 
         try:

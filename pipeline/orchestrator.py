@@ -21,6 +21,7 @@ from config.settings import settings
 from intelligence.feedback_loop import attach_user_preferences, get_user_preferences
 from intelligence.resume_enhancer import generate_insight
 from intelligence.skill_gap import compute_skill_gap
+from pipeline.classifier import classify_job
 from pipeline.deduplicate import is_duplicate
 from pipeline.filter import passes_filter
 from pipeline.models import Job
@@ -197,10 +198,12 @@ def enrich_jobs(jobs: List[Job], profile: dict) -> Tuple[List[Job], float]:
             )
 
             score = score_job(job, profile)
+            job.match_type = classify_job(score=job.score, transferable_count=0)
             logger.info(
                 f"[SCORER] job_id={getattr(job, 'job_id', 'unknown')} "
                 f"title={getattr(job, 'title', '')} "
                 f"score={score} "
+                f"match_type={job.match_type} "
                 f"breakdown={getattr(job, 'score_breakdown', {})}"
             )
             total_score += score
