@@ -38,7 +38,8 @@ def apply_migrations(conn):
     # 1. Add Columns to jobs safely
     columns_to_add = [
         ("jobs", "updated_at", "DATETIME"),
-        ("jobs", "raw_json", "TEXT")
+        ("jobs", "raw_json", "TEXT"),
+        ("jobs", "match_type", "TEXT DEFAULT ''"),
     ]
 
     for table, col_name, col_type in columns_to_add:
@@ -67,7 +68,8 @@ def apply_migrations(conn):
         ("idx_missing_skills_job_id", "missing_skills(job_id)"),
         ("idx_user_interactions_job_id", "user_interactions(job_id)"),
         ("idx_user_interactions_action", "user_interactions(action)"),
-        ("idx_user_interactions_created_at", "user_interactions(created_at)")
+        ("idx_user_interactions_created_at", "user_interactions(created_at)"),
+        ("idx_job_runs_status", "job_runs(status)"),
     ]
 
     for idx_name, idx_def in indexes:
@@ -175,6 +177,18 @@ def init_db():
             )
             """)
             logger.debug("[DB] Table 'user_interactions' ensured")
+
+            cursor.execute("""
+CREATE TABLE IF NOT EXISTS job_runs (
+    run_id       TEXT PRIMARY KEY,
+    status       TEXT NOT NULL DEFAULT 'queued',
+    created_at   DATETIME NOT NULL,
+    started_at   DATETIME,
+    completed_at DATETIME,
+    result_json  TEXT
+)
+""")
+            logger.debug("[DB] Table 'job_runs' ensured")
 
             apply_migrations(conn)
 
