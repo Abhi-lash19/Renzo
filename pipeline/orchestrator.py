@@ -29,6 +29,8 @@ from pipeline.scorer import score_job
 from storage.repository import JobRepository
 from utils.logger import get_logger
 from utils.matching_engine import build_match_data
+from utils.validation import validate_job
+from core.exceptions import RenzoValidationError
 
 logger = get_logger(__name__)
 
@@ -96,6 +98,13 @@ def prepare_jobs_with_match_data(jobs: List[Job], profile: dict) -> List[Job]:
     for job in jobs[: settings.JOB_FETCH_LIMIT]:
         try:
             _finalize_job_id(job)
+            try:
+                validate_job(job)
+            except RenzoValidationError as e:
+                logger.warning(
+                    f"[PREPARE] Skipping invalid job job_id={getattr(job, 'job_id', 'unknown')}: {e}"
+                )
+                continue
             match_data = build_match_data(job, profile)
             if not match_data:
                 raise ValueError("match_data must be built before filtering")
