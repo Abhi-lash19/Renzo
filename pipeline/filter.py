@@ -1,5 +1,7 @@
+from datetime import datetime
 from typing import TYPE_CHECKING, Tuple
 
+from config.settings import settings
 from utils.logger import get_logger
 from utils.matching_engine import apply_match_data, build_match_data
 
@@ -27,6 +29,8 @@ def passes_filter(job: "Job", profile: dict, threshold: int = 4) -> Tuple[bool, 
     Returns (passed, reason, filter_score).
 
     Filtering is match_data-driven and fails fast if match_data cannot be built.
+    Age filter is applied first using settings.MAX_JOB_AGE_HOURS; jobs without a
+    posted_at timestamp are not rejected by the age check.
     """
     try:
         if not getattr(job, "title", None) or not getattr(job, "description", None):
@@ -35,6 +39,20 @@ def passes_filter(job: "Job", profile: dict, threshold: int = 4) -> Tuple[bool, 
                 f"passed=False reason=missing_title_or_description filter_score=0.0"
             )
             return False, "missing title/description", 0.0
+
+        # Age filter: reject jobs older than MAX_JOB_AGE_HOURS.
+        # Jobs without a posted_at timestamp are not rejected — we cannot determine their age.
+        posted_at = getattr(job, "posted_at", None)
+        if posted_at is not None:
+            clean_posted_at = posted_at.replace(tzinfo=None) if posted_at.tzinfo else posted_at
+            age_hours = (datetime.utcnow() - clean_posted_at).total_seconds() / 3600.0
+            if age_hours > settings.MAX_JOB_AGE_HOURS:
+                logger.info(
+                    f"[FILTER_DECISION] job_id={getattr(job, 'job_id', 'unknown')} "
+                    f"passed=False reason=too_old age_hours={age_hours:.1f} "
+                    f"max_age_hours={settings.MAX_JOB_AGE_HOURS} filter_score=0.0"
+                )
+                return False, f"too old ({age_hours:.1f}h > {settings.MAX_JOB_AGE_HOURS}h)", 0.0
 
         match_data = getattr(job, "match_data", None) or build_match_data(job, profile)
         if not match_data:

@@ -1,41 +1,47 @@
+"""
+Renzo — entry point.
+
+Responsibilities:
+  - fetch jobs from all sources (concurrent)
+  - call the pipeline orchestrator
+  - write output files
+  - manage DB lifecycle
+
+Pipeline orchestration lives in pipeline/orchestrator.py.
+"""
+
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 from config.settings import settings
 from fetchers.adzuna_api import AdzunaFetcher
 from fetchers.indeed_rss import IndeedRSSFetcher
 from fetchers.remotive_api import RemotiveFetcher
-from intelligence.feedback_loop import attach_user_preferences, get_user_preferences
 from intelligence.resume_enhancer import generate_insight
-from intelligence.skill_gap import compute_skill_gap
-from pipeline.deduplicate import is_duplicate
-from pipeline.filter import passes_filter
 from pipeline.models import Job
-from pipeline.scorer import score_job
+from pipeline.orchestrator import process_jobs
 from storage.db import init_db
 from storage.repository import JobRepository
 from utils.logger import get_logger
-from utils.matching_engine import build_match_data
 from utils.profile_loader import load_profile
 
 logger = get_logger(__name__)
 OUTPUT_DIR = Path("output")
 
 
-def _stage_log(stage: str, started_at: float, message: str) -> None:
-    elapsed = time.perf_counter() - started_at
-    logger.info(f"[{stage}] {message} | {elapsed:.2f}s")
-
+# ---------------------------------------------------------------------------
+# Fetching
+# ---------------------------------------------------------------------------
 
 def fetch_all_jobs() -> List[Job]:
-    """Fetch jobs from all sources concurrently with timing and error handling."""
+    """Fetch jobs from all sources concurrently."""
     sources = [
         IndeedRSSFetcher(),
         AdzunaFetcher(),
-        RemotiveFetcher()
+        RemotiveFetcher(),
     ]
 
     all_jobs: List[Job] = []
@@ -43,15 +49,20 @@ def fetch_all_jobs() -> List[Job]:
     try:
         with ThreadPoolExecutor(max_workers=settings.MAX_WORKERS) as executor:
             future_to_source = {
-                executor.submit(source.fetch_and_normalize): (source.__class__.__name__, time.perf_counter())
+                executor.submit(source.fetch_and_normalize): (
+                    source.__class__.__name__,
+                    time.perf_counter(),
+                )
                 for source in sources
             }
             for future in as_completed(future_to_source):
                 source_name, source_started = future_to_source[future]
                 try:
                     jobs = future.result()
-                    execution_time = time.perf_counter() - source_started
-                    logger.info(f"✅ {source_name}: {len(jobs)} jobs fetched in {execution_time:.2f}s")
+                    elapsed = time.perf_counter() - source_started
+                    logger.info(
+                        f"✅ {source_name}: {len(jobs)} jobs fetched in {elapsed:.2f}s"
+                    )
                     all_jobs.extend(jobs)
                 except Exception as e:
                     logger.exception(f"❌ {source_name} failed: {e}")
@@ -59,193 +70,14 @@ def fetch_all_jobs() -> List[Job]:
         logger.exception(f"Threadpool error: {e}")
 
     logger.info(f"📥 Total fetched across all sources: {len(all_jobs)} jobs")
-    if len(all_jobs) == 0:
+    if not all_jobs:
         logger.error("❌ CRITICAL: No jobs fetched from any source")
     return all_jobs
 
-def load_learning_preferences(repository: JobRepository, profile: dict) -> dict:
-    preferences = get_user_preferences(repository, profile)
-    attach_user_preferences(profile, preferences)
-    logger.info(
-        f"[LEARNING_LOAD] applied={preferences.get('applied_jobs_count', 0)} "
-        f"ignored={preferences.get('ignored_jobs_count', 0)} "
-        f"preferred_skills={preferences.get('preferred_skills', [])[:5]}"
-    )
-    return preferences
 
-
-def refresh_learning_preferences(repository: JobRepository, profile: dict) -> dict:
-    preferences = get_user_preferences(repository, profile)
-    attach_user_preferences(profile, preferences)
-    logger.info(
-        f"[LEARNING_REFRESH] applied={preferences.get('applied_jobs_count', 0)} "
-        f"ignored={preferences.get('ignored_jobs_count', 0)} "
-        f"preferred_roles={preferences.get('preferred_roles', [])[:5]}"
-    )
-    return preferences
-
-
-def prepare_jobs_with_match_data(jobs: List[Job], profile: dict) -> List[Job]:
-    prepared_jobs: List[Job] = []
-    for job in jobs[: settings.JOB_FETCH_LIMIT]:
-        try:
-            match_data = build_match_data(job, profile)
-            if not match_data:
-                raise ValueError("match_data must be built before filtering")
-            prepared_jobs.append(job)
-        except Exception as error:
-            logger.exception(
-                f"[PIPELINE_ERROR] Failed to build match_data "
-                f"job_id={getattr(job, 'job_id', 'unknown')} title={getattr(job, 'title', '')}: {error}"
-            )
-    return prepared_jobs
-
-
-def filter_jobs(jobs: List[Job], profile: dict, fallback: bool = False) -> Tuple[List[Job], int, float]:
-    accepted_jobs: List[Job] = []
-    filtered_count = 0
-    total_score = 0.0
-    
-    threshold = 3 if fallback else 4
-    limit_jobs = jobs
-
-    for job in limit_jobs:
-        try:
-            passed, reason, filter_score = passes_filter(job, profile, threshold=threshold)
-            total_score += filter_score
-            if passed:
-                accepted_jobs.append(job)
-            else:
-                filtered_count += 1
-        except Exception as e:
-            logger.exception(f"Error filtering job: {e}")
-            filtered_count += 1
-
-    # Fallback logic
-    if not fallback and len(accepted_jobs) < 20:
-        logger.info(f"Only {len(accepted_jobs)} passed limit. Engaging fallback threshold=3")
-        accepted_jobs = []
-        filtered_count = 0
-        total_score = 0.0
-        for job in limit_jobs:
-            try:
-                passed, reason, filter_score = passes_filter(job, profile, threshold=3)
-                total_score += filter_score
-                if passed:
-                    accepted_jobs.append(job)
-                else:
-                    filtered_count += 1
-            except Exception:
-                filtered_count += 1
-
-    evaluated_count = len(limit_jobs)
-    avg_score = (total_score / evaluated_count) if evaluated_count > 0 else 0.0
-    return accepted_jobs, filtered_count, avg_score
-
-def deduplicate_jobs(jobs: List[Job], repository: JobRepository) -> Tuple[List[Job], int]:
-    unique_jobs: List[Job] = []
-    duplicate_count = 0
-    
-    # clear local memory for fuzzy match this run
-    import pipeline.deduplicate
-    pipeline.deduplicate._local_jobs = [] 
-
-    for job in jobs:
-        try:
-            if is_duplicate(job, repository):
-                duplicate_count += 1
-            else:
-                unique_jobs.append(job)
-        except Exception as e:
-            logger.exception(f"Error deduplicating job: {e}")
-            unique_jobs.append(job)
-    return unique_jobs, duplicate_count
-
-def store_jobs(jobs: List[Job], repository: JobRepository) -> List[Job]:
-    stored_jobs: List[Job] = []
-    for job in jobs:
-        try:
-            # Skip if missing job_id (SAFETY CHECK)
-            if not job.job_id:
-                logger.warning(f"Skipping job with missing ID: {job.title}")
-                continue
-            if not getattr(job, "match_data", None):
-                raise ValueError("match_data must exist before storing")
-
-            # Ensure globally unique job_id (CRITICAL FIX)
-            job.job_id = f"{job.source}_{job.job_id}"
-
-            if repository.insert_job(job):
-                repository.insert_skills(job.job_id, job.skills)
-                stored_jobs.append(job)
-        except Exception as e:
-            logger.exception(f"Storage failed for job: {e}")
-    return stored_jobs
-
-
-def enrich_jobs(jobs: List[Job], profile: dict) -> Tuple[List[Job], float]:
-    """
-    Enrich jobs with scoring.
-
-    IMPORTANT:
-    - Skill extraction MUST NOT happen here.
-    - build_match_data() is the single source of truth and should already be executed before this step.
-    """
-    enriched_jobs: List[Job] = []
-    total_score = 0.0
-
-    for job in jobs:
-        try:
-            # SAFETY: Ensure match_data exists (fail fast if pipeline order breaks)
-            if not getattr(job, "match_data", None):
-                logger.error(
-                    f"[PIPELINE_ERROR] Missing match_data before scoring "
-                    f"job_id={getattr(job, 'job_id', 'unknown')} title={getattr(job, 'title', '')}"
-                )
-                raise ValueError("match_data must be built before scoring")
-
-            logger.info(
-                f"[SCORER_INPUT] job_id={getattr(job, 'job_id', 'unknown')} "
-                f"match_data={getattr(job, 'match_data', {})}"
-            )
-
-            score = score_job(job, profile)
-            logger.info(
-                f"[SCORER] job_id={getattr(job, 'job_id', 'unknown')} "
-                f"title={getattr(job, 'title', '')} "
-                f"score={score} "
-                f"breakdown={getattr(job, 'score_breakdown', {})}"
-            )
-            total_score += score
-            enriched_jobs.append(job)
-
-        except Exception as e:
-            logger.exception(
-                f"Error enriching job job_id={getattr(job, 'job_id', 'unknown')} "
-                f"title={getattr(job, 'title', '')}: {e}"
-            )
-
-    avg_score = (total_score / len(enriched_jobs)) if enriched_jobs else 0.0
-    return enriched_jobs, avg_score
-
-
-def generate_intelligence(jobs: List[Job], repository: JobRepository, profile: dict) -> int:
-    intelligence_count = 0
-    for job in jobs:
-        try:
-            if not getattr(job, "match_data", None):
-                raise ValueError("match_data must exist before intelligence generation")
-            compute_skill_gap(job, profile)
-            job.insight = generate_insight(job, profile)
-            skills_saved = repository.insert_skills(job.job_id, job.skills)
-            missing_saved = repository.insert_missing_skills(job.job_id, job.missing_skills)
-            score_saved = repository.update_job_score(job.job_id, job.score)
-            if skills_saved and missing_saved and score_saved:
-                intelligence_count += 1
-        except Exception as e:
-            logger.exception(f"Error generating intelligence for job {getattr(job, 'job_id', 'unknown')}: {e}")
-    return intelligence_count
-
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
 
 def _job_to_dict(job: Job) -> Dict[str, object]:
     return {
@@ -289,7 +121,9 @@ def export_outputs(repository: JobRepository, profile: dict) -> None:
                 f"   source: {job.source}\n"
                 f"   url: {job.url}\n"
             )
-        (OUTPUT_DIR / "job_report.txt").write_text("\n".join(report_lines), encoding="utf-8")
+        (OUTPUT_DIR / "job_report.txt").write_text(
+            "\n".join(report_lines), encoding="utf-8"
+        )
 
         aggregated_gap: Dict[str, int] = {}
         for job in top_jobs:
@@ -297,7 +131,9 @@ def export_outputs(repository: JobRepository, profile: dict) -> None:
                 aggregated_gap[skill] = aggregated_gap.get(skill, 0) + 1
         gap_lines = [
             f"{skill}: missing in {count} jobs"
-            for skill, count in sorted(aggregated_gap.items(), key=lambda item: (-item[1], item[0]))
+            for skill, count in sorted(
+                aggregated_gap.items(), key=lambda item: (-item[1], item[0])
+            )
         ]
         (OUTPUT_DIR / "skill_gap_report.txt").write_text(
             "\n".join(gap_lines) if gap_lines else "No missing skills detected in top jobs.",
@@ -305,7 +141,9 @@ def export_outputs(repository: JobRepository, profile: dict) -> None:
         )
 
         for job in top_jobs[:10]:
-            safe_job_id = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in job.job_id)
+            safe_job_id = "".join(
+                ch if ch.isalnum() or ch in "-_" else "_" for ch in job.job_id
+            )
             lines = [
                 f"Job: {job.title} at {job.company}",
                 f"Why match: {job.insight.get('why_match', '')}",
@@ -321,141 +159,28 @@ def export_outputs(repository: JobRepository, profile: dict) -> None:
                 *job.insight.get("project_suggestions", []),
             ]
             (OUTPUT_DIR / f"resume_suggestions_{safe_job_id}.txt").write_text(
-                "\n".join(lines),
-                encoding="utf-8",
+                "\n".join(lines), encoding="utf-8"
             )
 
-        logger.info(f"[OUTPUT] Generated reports for {len(top_jobs)} jobs in {OUTPUT_DIR}")
+        logger.info(
+            f"[OUTPUT] Generated reports for {len(top_jobs)} jobs in {OUTPUT_DIR}"
+        )
     except Exception as e:
         logger.exception(f"Error exporting outputs: {e}")
 
-def score_stored_jobs(jobs: List[Job], repository: JobRepository, profile: dict) -> int:
-    """
-    Re-score already stored jobs.
 
-    IMPORTANT:
-    - Skill extraction MUST NOT happen here.
-    - match_data must already exist.
-    """
-    scored_count = 0
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
-    for job in jobs:
-        try:
-            if not getattr(job, "match_data", None):
-                logger.error(
-                    f"[PIPELINE_ERROR] Missing match_data before re-scoring "
-                    f"job_id={getattr(job, 'job_id', 'unknown')}"
-                )
-                raise ValueError("match_data must be built before scoring")
-
-            compute_skill_gap(job, profile)
-            job.insight = generate_insight(job, profile)
-            score_job(job, profile)
-
-            if repository.update_job_score(job.job_id, job.score):
-                scored_count += 1
-
-        except Exception as e:
-            logger.exception(
-                f"Error scoring/updating job job_id={getattr(job, 'job_id', 'unknown')}: {e}"
-            )
-
-    return scored_count
-
-def print_top_jobs(repository: JobRepository, profile: dict) -> None:
-    try:
-        top_jobs = repository.get_top_jobs(limit=30)
-        if not top_jobs:
-            logger.error("No jobs available for output")
-            return
-
-        logger.info("🏆 Top Jobs:")
-        for index, job in enumerate(top_jobs[:5], start=1):
-            try:
-                if not getattr(job, "match_data", None):
-                    logger.warning(
-                        f"[PIPELINE_WARNING] match_data missing during print for job_id={job.job_id}"
-                    )
-
-                compute_skill_gap(job, profile)
-                insight = generate_insight(job, profile)
-
-                logger.info(f"{index}. {job.title} (Score: {job.score:.2f})")
-                logger.info(f"   Company: {job.company}")
-                
-                matched_str = ', '.join(job.skills) if job.skills else 'None'
-                missing_str = ', '.join(getattr(job, 'missing_skills', [])) or 'None'
-                
-                logger.info(f"   Matched: {matched_str}")
-                logger.info(f"   Missing: {missing_str}")
-                logger.info(f"   Insight: {insight.get('recommendation', '')}")
-                logger.info(f"   Source: {job.source}")
-            except Exception as e:
-                logger.exception(f"Error printing job {index}: {e}")
-                
-        logger.info(f"Displayed top {min(len(top_jobs), 5)} of {len(top_jobs)} jobs")
-    except Exception as e:
-        logger.exception(f"Error printing top jobs: {e}")
-
-def process_jobs(jobs: List[Job], repository: JobRepository, profile: dict) -> int:
-    total_fetched = len(jobs)
-    if total_fetched == 0:
-        return 0
-
-    try:
-        learning_started = time.perf_counter()
-        load_learning_preferences(repository, profile)
-        _stage_log("LEARNING_LOAD_TIME", learning_started, "loaded user preferences")
-
-        match_started = time.perf_counter()
-        prepared_jobs = prepare_jobs_with_match_data(jobs, profile)
-        _stage_log("MATCH_TIME", match_started, f"prepared={len(prepared_jobs)} jobs with match_data")
-
-        filter_started = time.perf_counter()
-        filtered_jobs, filtered_count, avg_filter_score = filter_jobs(prepared_jobs, profile)
-        _stage_log("FILTER_TIME", filter_started, "finished filtering")
-        logger.info(f"[FILTER] total={total_fetched} accepted={len(filtered_jobs)} rejected={filtered_count} avg_score={avg_filter_score:.1f}")
-
-        dedup_started = time.perf_counter()
-        unique_jobs, duplicate_count = deduplicate_jobs(filtered_jobs, repository)
-        _stage_log("DEDUP_TIME", dedup_started, "finished dedup")
-        logger.info(f"[DEDUP] unique={len(unique_jobs)} duplicates={duplicate_count}")
-
-        score_started = time.perf_counter()
-        enriched_jobs, avg_eval_score = enrich_jobs(unique_jobs, profile)
-        _stage_log("SCORE_TIME", score_started, "finished scoring")
-        logger.info(f"[SCORE] avg_score={avg_eval_score:.1f}")
-
-        store_started = time.perf_counter()
-        stored_jobs = store_jobs(enriched_jobs, repository)
-        _stage_log("STORE_TIME", store_started, f"stored={len(stored_jobs)}")
-
-        intelligence_started = time.perf_counter()
-        intelligence_count = generate_intelligence(stored_jobs, repository, profile)
-        _stage_log("INTEL_TIME", intelligence_started, f"intelligence={intelligence_count}")
-
-        learning_refresh_started = time.perf_counter()
-        refresh_learning_preferences(repository, profile)
-        _stage_log("LEARNING_UPDATE_TIME", learning_refresh_started, "refreshed learning state")
-
-        logger.info(
-            f"Processed {total_fetched} jobs -> {len(filtered_jobs)} relevant -> "
-            f"{len(unique_jobs)} unique -> {len(stored_jobs)} stored -> "
-            f"{intelligence_count} intelligent -> learning refreshed"
-        )
-        return len(stored_jobs)
-    except Exception as e:
-        logger.exception(f"Fatal error in process_jobs: {e}")
-        return 0
-
-def main():
+def main() -> None:
     from storage.db_manager import db_manager
 
     try:
         init_db()
         profile = load_profile()
         jobs = fetch_all_jobs()
-        if len(jobs) == 0:
+        if not jobs:
             return
 
         repository = JobRepository()
@@ -469,6 +194,7 @@ def main():
         logger.exception(f"Fatal error in main: {e}")
     finally:
         db_manager.shutdown()
+
 
 if __name__ == "__main__":
     main()
