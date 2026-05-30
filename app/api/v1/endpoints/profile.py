@@ -11,9 +11,8 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from app.auth import get_current_user
 from app.dependencies import get_repository
 from app.schemas.profile import ProfileResponse, ProfileUpdateRequest
-from resume.builder import build_profile, _dedupe, _build_weighted_skills
+from resume.builder import build_profile, recompute_profile_skills
 from resume.extractor import extract_text
-from resume.normalizer import normalize_skills
 from resume.parser import parse_resume
 from storage.repository import JobRepository
 from utils.logger import get_logger
@@ -134,18 +133,7 @@ def update_profile(
     update_fields = body.model_dump(exclude_none=True)
     existing.update(update_fields)
 
-    combined = (
-        existing.get("core_skills", [])
-        + existing.get("secondary_skills", [])
-        + existing.get("cloud", [])
-        + existing.get("devops", [])
-    )
-    existing["all_skills"] = _dedupe(normalize_skills(combined))
-    existing["weighted_skills"] = _build_weighted_skills(
-        existing.get("core_skills", []),
-        existing.get("secondary_skills", []),
-        existing.get("preferred_keywords", []),
-    )
+    existing = recompute_profile_skills(existing)
     existing["source"] = "manual"
 
     repository.upsert_profile(

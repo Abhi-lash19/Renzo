@@ -603,6 +603,11 @@ class JobRepository:
         now_str = datetime.utcnow().isoformat()
         is_postgres = _settings.DB_BACKEND == "postgres"
 
+        params = (
+            profile_id, user_id, name, role, experience_level,
+            raw_text, profile_json, source, now_str, now_str,
+        )
+
         if is_postgres:
             query = """
                 INSERT INTO user_profiles
@@ -618,37 +623,62 @@ class JobRepository:
                     source = EXCLUDED.source,
                     updated_at = EXCLUDED.updated_at
             """
+            try:
+                with db_manager.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query, params)
+                    conn.commit()
+                    logger.info(
+                        f"[PROFILE] Upserted profile for user_id={user_id[:8]}...",
+                        extra={"component": "DB", "event": "profile_upsert",
+                               "meta": {"user_id": user_id[:8], "source": source}}
+                    )
+                    return True
+            except Exception as e:
+                logger.error(
+                    f"[PROFILE] Failed to upsert for user_id={user_id[:8]}...: {e}",
+                    extra={"component": "DB", "event": "profile_upsert_error",
+                           "meta": {"user_id": user_id[:8], "error": str(e)}}
+                )
+                return False
         else:
-            query = """
-                INSERT OR REPLACE INTO user_profiles
+            # SQLite: INSERT OR IGNORE preserves created_at on existing rows;
+            # the subsequent UPDATE refreshes all mutable fields.
+            insert_query = """
+                INSERT OR IGNORE INTO user_profiles
                     (id, user_id, name, role, experience_level,
                      raw_text, profile_json, source, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
-
-        params = (
-            profile_id, user_id, name, role, experience_level,
-            raw_text, profile_json, source, now_str, now_str,
-        )
-
-        try:
-            with db_manager.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(query, params)
-                conn.commit()
-                logger.info(
-                    f"[PROFILE] Upserted profile for user_id={user_id[:8]}...",
-                    extra={"component": "DB", "event": "profile_upsert",
-                           "meta": {"user_id": user_id[:8], "source": source}}
+            update_query = """
+                UPDATE user_profiles
+                SET name = ?, role = ?, experience_level = ?,
+                    raw_text = ?, profile_json = ?, source = ?, updated_at = ?
+                WHERE user_id = ?
+            """
+            try:
+                with db_manager.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(insert_query, params)
+                    cursor.execute(update_query, (
+                        name, role, experience_level,
+                        raw_text, profile_json, source, now_str,
+                        user_id,
+                    ))
+                    conn.commit()
+                    logger.info(
+                        f"[PROFILE] Upserted profile for user_id={user_id[:8]}...",
+                        extra={"component": "DB", "event": "profile_upsert",
+                               "meta": {"user_id": user_id[:8], "source": source}}
+                    )
+                    return True
+            except Exception as e:
+                logger.error(
+                    f"[PROFILE] Failed to upsert for user_id={user_id[:8]}...: {e}",
+                    extra={"component": "DB", "event": "profile_upsert_error",
+                           "meta": {"user_id": user_id[:8], "error": str(e)}}
                 )
-                return True
-        except Exception as e:
-            logger.error(
-                f"[PROFILE] Failed to upsert for user_id={user_id[:8]}...: {e}",
-                extra={"component": "DB", "event": "profile_upsert_error",
-                       "meta": {"user_id": user_id[:8], "error": str(e)}}
-            )
-            return False
+                return False
 
     def get_profile_by_user(self, user_id: str) -> dict | None:
         """Fetch stored profile for a user. Returns None if not found."""

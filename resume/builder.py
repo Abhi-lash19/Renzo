@@ -144,3 +144,27 @@ def build_profile(parsed_resume) -> Dict[str, Any]:
         f"secondary={len(secondary_skills)} all={len(all_skills)}"
     )
     return profile
+
+
+def recompute_profile_skills(profile: dict) -> dict:
+    """
+    Recompute all_skills and weighted_skills after a manual profile update.
+
+    Call this whenever core_skills or secondary_skills change outside of the
+    normal build_profile() flow (e.g. after a PUT /profile merge-patch).
+
+    Modifies `profile` in-place and also returns it.
+    """
+    combined = (
+        profile.get("core_skills", [])
+        + profile.get("secondary_skills", [])
+        + profile.get("cloud", [])
+        + profile.get("devops", [])
+    )
+    profile["all_skills"] = _dedupe(normalize_skills(combined))
+    profile["weighted_skills"] = _build_weighted_skills(
+        profile.get("core_skills", []),
+        profile.get("secondary_skills", []),
+        profile.get("preferred_keywords", []),
+    )
+    return profile
