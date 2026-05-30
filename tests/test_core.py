@@ -19,7 +19,7 @@ from core.exceptions import (
     PipelineError,
     StorageError,
     FetchError,
-    ValidationError,
+    RenzoValidationError,
 )
 
 
@@ -39,8 +39,10 @@ class TestMatchType(unittest.TestCase):
         self.assertEqual(MatchType.STRONG, "strong")
 
     def test_all_three_members_exist(self):
-        members = list(MatchType)
-        self.assertEqual(len(members), 3)
+        self.assertEqual(
+            set(MatchType),
+            {MatchType.STRONG, MatchType.STRETCH, MatchType.LEARNING},
+        )
 
     def test_match_type_in_dict_key(self):
         d = {MatchType.STRONG: 1}
@@ -65,7 +67,7 @@ class TestExceptions(unittest.TestCase):
         self.assertTrue(issubclass(FetchError, RenzoError))
 
     def test_validation_error_is_renzo_error(self):
-        self.assertTrue(issubclass(ValidationError, RenzoError))
+        self.assertTrue(issubclass(RenzoValidationError, RenzoError))
 
     def test_can_raise_and_catch_as_renzo_error(self):
         with self.assertRaises(RenzoError):

@@ -18,5 +18,5 @@ class FetchError(RenzoError):
     """Raised when a job source fetch fails completely."""
 
 
-class ValidationError(RenzoError):
+class RenzoValidationError(RenzoError):
     """Raised when a job or profile fails validation."""
