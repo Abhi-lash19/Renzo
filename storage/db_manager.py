@@ -38,6 +38,74 @@ PG_POOL_MIN = int(os.getenv("PG_POOL_MIN", "2"))
 PG_POOL_MAX = int(os.getenv("PG_POOL_MAX", "10"))
 
 
+# ---------------------------------------------------------------------------
+# DB-API 2.0 Adapter — normalizes ? placeholders for backend compatibility
+# ---------------------------------------------------------------------------
+
+class _CursorAdapter:
+    """Wraps any DB-API 2.0 cursor. Replaces ? with the backend-specific placeholder."""
+
+    __slots__ = ("_cur", "_ph")
+
+    def __init__(self, raw_cursor, placeholder: str) -> None:
+        self._cur = raw_cursor
+        self._ph = placeholder
+
+    def _adapt(self, query: str) -> str:
+        """Replace ? with the backend placeholder. No-op for SQLite (placeholder='?')."""
+        if self._ph == "?":
+            return query
+        return query.replace("?", self._ph)
+
+    def execute(self, query: str, params=None):
+        return self._cur.execute(self._adapt(query), params or ())
+
+    def executemany(self, query: str, params_seq):
+        return self._cur.executemany(self._adapt(query), params_seq)
+
+    @property
+    def rowcount(self) -> int:
+        return self._cur.rowcount
+
+    def fetchone(self):
+        return self._cur.fetchone()
+
+    def fetchall(self):
+        return self._cur.fetchall()
+
+    def fetchmany(self, size: int = 1):
+        return self._cur.fetchmany(size)
+
+    def __iter__(self):
+        return iter(self._cur)
+
+
+class _ConnectionAdapter:
+    """Wraps any DB-API 2.0 connection. Yields _CursorAdapter from cursor()."""
+
+    __slots__ = ("_conn", "_ph")
+
+    def __init__(self, raw_conn, placeholder: str) -> None:
+        self._conn = raw_conn
+        self._ph = placeholder
+
+    def cursor(self) -> _CursorAdapter:
+        return _CursorAdapter(self._conn.cursor(), self._ph)
+
+    def commit(self) -> None:
+        self._conn.commit()
+
+    def rollback(self) -> None:
+        self._conn.rollback()
+
+    def executescript(self, script: str):
+        """SQLite-only passthrough for schema scripts."""
+        return self._conn.executescript(script)
+
+    def close(self) -> None:
+        self._conn.close()
+
+
 class DatabaseManager:
     """
     Thread-safe database manager.
@@ -127,22 +195,21 @@ class DatabaseManager:
     @contextmanager
     def connection(self):
         """
-        Context manager that yields a DB connection.
-
-        SQLite  : returns shared connection (caller must NOT close it).
-        Postgres: acquires from pool, returns to pool on exit.
+        Context manager that yields a _ConnectionAdapter.
+        - SQLite: shared connection + threading.Lock, placeholder='?'
+        - Postgres: pool-acquired connection, placeholder='%s'
         """
         self._ensure_init()
 
         if self._db_type == "postgres" and self._pg_pool:
             conn = self._pg_pool.getconn()
             try:
-                yield conn
+                yield _ConnectionAdapter(conn, placeholder="%s")
             finally:
                 self._pg_pool.putconn(conn)
         else:
             with self._lock:
-                yield self._sqlite_conn
+                yield _ConnectionAdapter(self._sqlite_conn, placeholder="?")
 
     def get_connection(self):
         """
