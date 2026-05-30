@@ -36,6 +36,7 @@ class Job:
         self.is_startup: bool = False
         self.missing_skills: List[str] = []
         self.insight: dict = {}
+        self.match_type: str = ""  # populated by pipeline/classifier.py after scoring
 
     def __repr__(self) -> str:
         return f"<Job {self.title} at {self.company}>"
