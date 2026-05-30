@@ -12,7 +12,7 @@ def client(tmp_path, monkeypatch):
     import storage.db_manager as dm
     db_file = tmp_path / "test_feedback_api.db"
     monkeypatch.setattr(db_module, "DB_PATH", db_file)
-    monkeypatch.setattr(dm, "DB_PATH", db_file)
+    monkeypatch.setattr(dm, "DB_PATH", str(db_file))
     dm.db_manager._sqlite_conn = None
     dm.db_manager._initialized = False
     from app.main import app
@@ -48,3 +48,9 @@ class TestFeedbackEndpoint:
     def test_empty_body_returns_422(self, client):
         response = client.post("/v1/feedback", json={})
         assert response.status_code == 422
+
+    def test_feedback_for_unknown_job_returns_recorded_false(self, client):
+        """record_interaction returns False when job_id doesn't exist (FK constraint)."""
+        response = client.post("/v1/feedback", json={"job_id": "nonexistent-job-id", "action": "viewed"})
+        assert response.status_code == 200
+        assert response.json()["recorded"] is False

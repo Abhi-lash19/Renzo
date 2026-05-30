@@ -13,7 +13,7 @@ def client(tmp_path, monkeypatch):
     import storage.db_manager as dm
     db_file = tmp_path / "test_jobs_api.db"
     monkeypatch.setattr(db_module, "DB_PATH", db_file)
-    monkeypatch.setattr(dm, "DB_PATH", db_file)
+    monkeypatch.setattr(dm, "DB_PATH", str(db_file))
     dm.db_manager._sqlite_conn = None
     dm.db_manager._initialized = False
     from app.main import app
@@ -73,3 +73,33 @@ class TestGetRun:
         data = client.get(f"/v1/runs/{run_id}").json()
         for key in ("run_id", "status", "created_at"):
             assert key in data
+
+    def test_get_completed_run_has_result_list(self, client):
+        """When a run completes, GET /runs/{run_id} returns the result array."""
+        import json
+        from storage.repository import JobRepository
+        from storage.db import init_db
+        import storage.db_manager as dm
+
+        # Create a run and manually set it to complete with sample result_json
+        repo = JobRepository()
+        run_id = "completed-test-run"
+        repo.create_job_run(run_id)
+        sample_result = json.dumps([{
+            "job_id": "job-001",
+            "title": "Python Dev",
+            "company": "TestCo",
+            "location": "Remote",
+            "url": "https://example.com/job/1",
+            "score": 8.5,
+            "match_type": "strong",
+        }])
+        repo.update_run_status(run_id, "complete", result_json=sample_result)
+
+        response = client.get(f"/v1/runs/{run_id}")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "complete"
+        assert data["result"] is not None
+        assert len(data["result"]) == 1
+        assert data["result"][0]["job_id"] == "job-001"

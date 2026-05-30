@@ -10,8 +10,11 @@ from app.dependencies import get_profile, get_repository
 from app.schemas.job import JobItemResponse, RunDetailResponse, RunResponse
 from pipeline.orchestrator import fetch_all_jobs, process_jobs
 from storage.repository import JobRepository
+from utils.logger import get_logger
 
 router = APIRouter()
+
+logger = get_logger(__name__)
 
 
 def _now_iso() -> str:
@@ -44,6 +47,7 @@ def _execute_pipeline_run(run_id: str, repository: JobRepository, profile: dict)
             result_json=json.dumps(result),
         )
     except Exception:
+        logger.exception(f"[PIPELINE_RUN] run_id={run_id} failed with unhandled exception")
         repository.update_run_status(run_id, "failed", completed_at=_now_iso())
 
 

@@ -339,7 +339,7 @@ class JobRepository:
                 cursor.execute(
                     """
                     SELECT id, title, company, location, description, url, source,
-                           posted_at, fetched_at, score, is_remote, is_startup
+                           posted_at, fetched_at, score, is_remote, is_startup, match_type
                     FROM jobs
                     ORDER BY score DESC
                     LIMIT ?
@@ -369,6 +369,7 @@ class JobRepository:
                 job.score = row[9]
                 job.is_remote = bool(row[10])
                 job.is_startup = bool(row[11])
+                job.match_type = row[12] or ""
                 job.skills = skill_map.get(job.job_id, [])
                 job.missing_skills = missing_map.get(job.job_id, [])
                 jobs.append(job)
