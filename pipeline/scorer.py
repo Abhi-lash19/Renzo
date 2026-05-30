@@ -89,7 +89,7 @@ def calculate_bonus_score(job: "Job") -> float:
 
 def calculate_learning_score(job: "Job") -> float:
     try:
-        return float(_get_match_data(job).get("learning_score", 0.0) or 0.0)
+        return _clamp(float(_get_match_data(job).get("learning_score", 0.0) or 0.0))
     except Exception as error:
         logger.exception(f"Error in learning score: {error}")
         return 0.0
