@@ -11,9 +11,6 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_seen_hashes = []
-_local_jobs = []  # Local memory cache for conservative fuzzy matching within run
-
 
 def _build_fuzzy_fingerprint(job: "Job") -> dict[str, str]:
     return {
@@ -31,65 +28,94 @@ def _log_duplicate(job: "Job", reason: str) -> None:
     )
 
 
+class DeduplicateEngine:
+    """
+    Stateful deduplication engine scoped to a single pipeline run.
+
+    Maintains an in-memory list of seen job fingerprints for fuzzy matching
+    within a run, and delegates persistent hash storage to the repository.
+    Call reset() at the start of each run to clear in-memory state.
+    """
+
+    def __init__(self) -> None:
+        self._local_jobs: list[dict] = []
+        self._seen_hashes: list[str] = []
+
+    def reset(self) -> None:
+        """Clear in-memory state. Call at the start of each pipeline run."""
+        self._local_jobs = []
+        self._seen_hashes = []
+
+    def is_duplicate(self, job: "Job", repository: JobRepository) -> bool:
+        """
+        Check if the job is a duplicate using preferred identity keys first,
+        then a conservative fuzzy fallback only when identifiers are missing.
+        """
+        has_fallback_fields = bool(getattr(job, "title", None) and getattr(job, "company", None))
+        if not (getattr(job, "url", None) or getattr(job, "job_id", None) or has_fallback_fields):
+            logger.debug(
+                f"Invalid dedup input: job_id={getattr(job, 'job_id', 'unknown')} "
+                f"title={getattr(job, 'title', '') or 'missing'} "
+                f"company={getattr(job, 'company', '') or 'missing'}"
+            )
+            return False
+
+        identity_kind, identity_key = build_job_identity(job)
+        if any(seen_job.get("identity_key") == identity_key for seen_job in self._local_jobs):
+            _log_duplicate(job, f"local exact {identity_kind} match")
+            return True
+
+        if repository.hash_exists(identity_key):
+            _log_duplicate(job, f"stored exact {identity_kind} match")
+            return True
+
+        fingerprint = _build_fuzzy_fingerprint(job)
+        combined_fingerprint = " | ".join(
+            [fingerprint["title"], fingerprint["company"], fingerprint["location"], fingerprint["source"]]
+        )
+
+        if identity_kind == "hash":
+            for seen_job in self._local_jobs:
+                same_company = seen_job["company"] == fingerprint["company"]
+                same_location = seen_job["location"] == fingerprint["location"]
+                same_source = seen_job["source"] == fingerprint["source"]
+                if not (same_company and same_location and same_source):
+                    continue
+
+                ratio = difflib.SequenceMatcher(
+                    None,
+                    combined_fingerprint,
+                    seen_job["fingerprint"],
+                ).ratio()
+                if ratio >= 0.9:
+                    _log_duplicate(
+                        job,
+                        f"fuzzy fallback match ratio={ratio:.2f} company/location/source aligned",
+                    )
+                    return True
+
+        if len(self._seen_hashes) < 5:
+            self._seen_hashes.append(identity_key)
+            logger.debug(f"Sample dedup hash [{len(self._seen_hashes)}]: {identity_key}")
+
+        self._local_jobs.append(
+            {**fingerprint, "fingerprint": combined_fingerprint, "identity_key": identity_key}
+        )
+
+        if not repository.insert_hash(identity_key):
+            logger.warning(
+                f"Unable to record dedup identity for job_id={getattr(job, 'job_id', 'unknown')} "
+                f"title={getattr(job, 'title', '')} identity_type={identity_kind}"
+            )
+            return False
+
+        return False
+
+
+# Module-level singleton — keeps existing callers (orchestrator.is_duplicate) working unchanged.
+_engine = DeduplicateEngine()
+
+
 def is_duplicate(job: "Job", repository: JobRepository) -> bool:
-    """
-    Check if the job is a duplicate using preferred identity keys first,
-    then a conservative fuzzy fallback only when identifiers are missing.
-    """
-    has_fallback_fields = bool(getattr(job, "title", None) and getattr(job, "company", None))
-    if not (getattr(job, "url", None) or getattr(job, "job_id", None) or has_fallback_fields):
-        logger.debug(
-            f"Invalid dedup input: job_id={getattr(job, 'job_id', 'unknown')} "
-            f"title={getattr(job, 'title', '') or 'missing'} "
-            f"company={getattr(job, 'company', '') or 'missing'}"
-        )
-        return False
-
-    identity_kind, identity_key = build_job_identity(job)
-    if any(seen_job.get("identity_key") == identity_key for seen_job in _local_jobs):
-        _log_duplicate(job, f"local exact {identity_kind} match")
-        return True
-
-    if repository.hash_exists(identity_key):
-        _log_duplicate(job, f"stored exact {identity_kind} match")
-        return True
-
-    fingerprint = _build_fuzzy_fingerprint(job)
-    combined_fingerprint = " | ".join(
-        [fingerprint["title"], fingerprint["company"], fingerprint["location"], fingerprint["source"]]
-    )
-
-    if identity_kind == "hash":
-        for seen_job in _local_jobs:
-            same_company = seen_job["company"] == fingerprint["company"]
-            same_location = seen_job["location"] == fingerprint["location"]
-            same_source = seen_job["source"] == fingerprint["source"]
-            if not (same_company and same_location and same_source):
-                continue
-
-            ratio = difflib.SequenceMatcher(
-                None,
-                combined_fingerprint,
-                seen_job["fingerprint"],
-            ).ratio()
-            if ratio >= 0.9:
-                _log_duplicate(
-                    job,
-                    f"fuzzy fallback match ratio={ratio:.2f} company/location/source aligned",
-                )
-                return True
-
-    if len(_seen_hashes) < 5:
-        _seen_hashes.append(identity_key)
-        logger.debug(f"Sample dedup hash [{len(_seen_hashes)}]: {identity_key}")
-
-    _local_jobs.append({**fingerprint, "fingerprint": combined_fingerprint, "identity_key": identity_key})
-
-    if not repository.insert_hash(identity_key):
-        logger.warning(
-            f"Unable to record dedup identity for job_id={getattr(job, 'job_id', 'unknown')} "
-            f"title={getattr(job, 'title', '')} identity_type={identity_kind}"
-        )
-        return False
-
-    return False
+    """Module-level shim delegating to the singleton engine."""
+    return _engine.is_duplicate(job, repository)

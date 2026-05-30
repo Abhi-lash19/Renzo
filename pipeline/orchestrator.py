@@ -165,9 +165,9 @@ def deduplicate_jobs(jobs: List[Job], repository: JobRepository) -> Tuple[List[J
     unique_jobs: List[Job] = []
     duplicate_count = 0
 
-    # Reset the in-process local memory so fuzzy matching is scoped to this run.
+    # Reset per-run in-memory state via the engine's public API.
     import pipeline.deduplicate
-    pipeline.deduplicate._local_jobs = []
+    pipeline.deduplicate._engine.reset()
 
     for job in jobs:
         try:
