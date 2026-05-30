@@ -102,7 +102,7 @@ class TestMigrationFilesContent:
         from storage.migrations.runner import MigrationRunner
         runner = MigrationRunner(MIGRATIONS_DIR)
         migrations = runner.load_migrations()
-        assert len(migrations) == 4
+        assert len(migrations) == 5
 
     def test_001_creates_all_core_tables(self):
         sql = (MIGRATIONS_DIR / "001_initial_schema.sql").read_text()

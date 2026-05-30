@@ -15,7 +15,7 @@ class TestMigrationRunner:
 
     def test_four_sql_files_exist(self):
         sql_files = sorted(MIGRATIONS_DIR.glob("0*.sql"))
-        assert len(sql_files) == 4
+        assert len(sql_files) == 5
 
     def test_migration_files_in_order(self):
         sql_files = sorted(MIGRATIONS_DIR.glob("0*.sql"))
@@ -24,12 +24,13 @@ class TestMigrationRunner:
         assert names[1].startswith("002_")
         assert names[2].startswith("003_")
         assert names[3].startswith("004_")
+        assert names[4].startswith("005_")
 
     def test_runner_loads_migration_files(self):
         from storage.migrations.runner import MigrationRunner
         runner = MigrationRunner(MIGRATIONS_DIR)
         migrations = runner.load_migrations()
-        assert len(migrations) == 4
+        assert len(migrations) == 5
         for name, sql in migrations:
             assert name.endswith(".sql")
             assert len(sql.strip()) > 0

@@ -70,6 +70,7 @@ def apply_migrations(conn):
         ("idx_user_interactions_action", "user_interactions(action)"),
         ("idx_user_interactions_created_at", "user_interactions(created_at)"),
         ("idx_job_runs_status", "job_runs(status)"),
+        ("idx_user_profiles_user_id", "user_profiles(user_id)"),
     ]
 
     for idx_name, idx_def in indexes:
@@ -189,6 +190,22 @@ CREATE TABLE IF NOT EXISTS job_runs (
 )
 """)
             logger.debug("[DB] Table 'job_runs' ensured")
+
+            cursor.execute("""
+CREATE TABLE IF NOT EXISTS user_profiles (
+    id               TEXT PRIMARY KEY,
+    user_id          TEXT UNIQUE,
+    name             TEXT,
+    role             TEXT,
+    experience_level TEXT,
+    raw_text         TEXT,
+    profile_json     TEXT NOT NULL,
+    source           TEXT DEFAULT 'upload',
+    created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at       DATETIME DEFAULT CURRENT_TIMESTAMP
+)
+""")
+            logger.debug("[DB] Table 'user_profiles' ensured")
 
             apply_migrations(conn)
 
