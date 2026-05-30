@@ -130,6 +130,7 @@ class JobRepository:
         return self._replace_job_items("missing_skills", job_id, skills)
 
     def insert_hash(self, hash_value: str) -> bool:
+        """Return True if newly inserted; False if already existed; True on error (conservative)."""
         query = "INSERT OR IGNORE INTO job_hashes (hash, created_at) VALUES (?, ?)"
         params = (hash_value, datetime.utcnow().isoformat())
 
@@ -138,17 +139,17 @@ class JobRepository:
                 cursor = conn.cursor()
                 cursor.execute(query, params)
                 conn.commit()
-                inserted = cursor.rowcount == 1
-                if inserted:
-                    return True
-                return self.hash_exists(hash_value)
+                # rowcount==1: newly inserted (new hash). rowcount==0: already existed (duplicate).
+                return cursor.rowcount == 1
         except sqlite3.Error as e:
             logger.warning(
                 f"Failed to insert hash {hash_value[:16]}...: {e}",
                 extra={"component": "DB", "event": "hash_insert_error",
                        "meta": {"hash_prefix": hash_value[:16], "error": str(e)}}
             )
-            return False
+            # Return True (conservative): treat as if newly inserted to avoid unbounded re-processing
+            # of a job whose hash was never persisted.
+            return True
 
     def hash_exists(self, hash_value: str) -> bool:
         try:
