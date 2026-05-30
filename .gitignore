@@ -13,7 +13,10 @@ logs/
 *.log
 
 # Data
-data/jobs.db
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
 data/resume.txt
 
 # Output
