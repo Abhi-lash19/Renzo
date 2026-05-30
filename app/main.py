@@ -24,7 +24,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # TODO: restrict to allowed origins in Phase 9 (SaaS layer)
     allow_methods=["*"],
     allow_headers=["*"],
 )

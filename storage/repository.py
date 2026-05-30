@@ -46,12 +46,23 @@ class JobRepository:
             return False
 
         context = self._job_context(job)
-        query = """
-            INSERT OR IGNORE INTO jobs (
-                id, title, company, location, description, url, source,
-                posted_at, fetched_at, score, is_remote, is_startup, updated_at, match_type
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """
+        from config.settings import settings as _settings
+        is_postgres = _settings.DB_BACKEND == "postgres"
+        if is_postgres:
+            query = """
+                INSERT INTO jobs (
+                    id, title, company, location, description, url, source,
+                    posted_at, fetched_at, score, is_remote, is_startup, updated_at, match_type
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO NOTHING
+            """
+        else:
+            query = """
+                INSERT OR IGNORE INTO jobs (
+                    id, title, company, location, description, url, source,
+                    posted_at, fetched_at, score, is_remote, is_startup, updated_at, match_type
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
         now_str = datetime.utcnow().isoformat()
         params = (
             job.job_id,
@@ -88,14 +99,14 @@ class JobRepository:
                            "meta": {"job_id": job.job_id}}
                 )
                 return True
-        except sqlite3.IntegrityError as e:
+        except Exception as e:
             logger.error(
                 f"Database integrity error inserting job: {context} error={e}",
                 extra={"component": "DB", "event": "insert_integrity_error",
                        "meta": {"job_id": job.job_id, "error": str(e)}}
             )
             return False
-        except sqlite3.Error as e:
+        except Exception as e:
             logger.error(
                 f"Failed to insert job: {context} error={e}",
                 extra={"component": "DB", "event": "insert_error",
@@ -116,7 +127,11 @@ class JobRepository:
                     )
                 conn.commit()
                 return True
-        except sqlite3.Error as e:
+        except Exception as e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             logger.error(
                 f"Failed to update {table} for job {job_id}: {e}",
                 extra={"component": "DB", "event": "replace_items_error",
@@ -132,7 +147,16 @@ class JobRepository:
 
     def insert_hash(self, hash_value: str) -> bool:
         """Return True if newly inserted; False if already existed; True on error (conservative)."""
-        query = "INSERT OR IGNORE INTO job_hashes (hash, created_at) VALUES (?, ?)"
+        from config.settings import settings as _settings
+        is_postgres = _settings.DB_BACKEND == "postgres"
+        if is_postgres:
+            query = """
+                INSERT INTO job_hashes (hash, created_at)
+                VALUES (?, ?)
+                ON CONFLICT (hash) DO NOTHING
+            """
+        else:
+            query = "INSERT OR IGNORE INTO job_hashes (hash, created_at) VALUES (?, ?)"
         params = (hash_value, datetime.utcnow().isoformat())
 
         try:
@@ -142,7 +166,7 @@ class JobRepository:
                 conn.commit()
                 # rowcount==1: newly inserted (new hash). rowcount==0: already existed (duplicate).
                 return cursor.rowcount == 1
-        except sqlite3.Error as e:
+        except Exception as e:
             logger.warning(
                 f"Failed to insert hash {hash_value[:16]}...: {e}",
                 extra={"component": "DB", "event": "hash_insert_error",
@@ -161,7 +185,7 @@ class JobRepository:
                     (hash_value,),
                 )
                 return cursor.fetchone() is not None
-        except sqlite3.Error as e:
+        except Exception as e:
             logger.error(
                 f"Failed to check hash {hash_value[:16]}...: {e}",
                 extra={"component": "DB", "event": "hash_check_error",
@@ -187,7 +211,7 @@ class JobRepository:
                     )
                     return False
                 return True
-        except sqlite3.Error as e:
+        except Exception as e:
             logger.error(
                 f"Failed to update score for job {job_id}: {e}",
                 extra={"component": "DB", "event": "score_update_error",
@@ -201,7 +225,7 @@ class JobRepository:
                 cursor = conn.cursor()
                 cursor.execute(f"SELECT skill FROM {table} WHERE job_id = ? ORDER BY skill ASC", (job_id,))
                 return [row[0] for row in cursor.fetchall()]
-        except sqlite3.Error as e:
+        except Exception as e:
             logger.error(
                 f"Failed to fetch {table} for job {job_id}: {e}",
                 extra={"component": "DB", "event": "fetch_items_error",
@@ -242,7 +266,7 @@ class JobRepository:
                            "meta": {"job_id": job_id, "action": normalized_action}}
                 )
                 return True
-        except sqlite3.Error as error:
+        except Exception as error:
             logger.error(
                 f"[INTERACTION_RECORD] job_id={job_id} action={normalized_action} error={error}",
                 extra={"component": "DB", "event": "interaction_error",
@@ -272,7 +296,7 @@ class JobRepository:
                     if skill:
                         skill_map[job_id].append(skill)
                 return {job_id: list(dict.fromkeys(skills)) for job_id, skills in skill_map.items()}
-        except sqlite3.Error as error:
+        except Exception as error:
             logger.error(
                 f"Failed to fetch skill map for interactions: {error}",
                 extra={"component": "DB", "event": "skill_map_error",
@@ -322,7 +346,7 @@ class JobRepository:
                         "skills": list(skill_map.get(job_id, [])),
                     })
                 return snapshots
-        except sqlite3.Error as error:
+        except Exception as error:
             logger.error(
                 f"Failed to fetch user interaction jobs: {error}",
                 extra={"component": "DB", "event": "interaction_jobs_error",
@@ -380,7 +404,7 @@ class JobRepository:
                        "meta": {"count": len(jobs), "limit": limit}}
             )
             return jobs
-        except sqlite3.Error as e:
+        except Exception as e:
             logger.error(
                 f"Failed to get top jobs: {e}",
                 extra={"component": "DB", "event": "top_jobs_error",
@@ -411,7 +435,7 @@ class JobRepository:
                     if skill:
                         skill_map[job_id].append(skill)
                 return {job_id: list(dict.fromkeys(skills)) for job_id, skills in skill_map.items()}
-        except sqlite3.Error as error:
+        except Exception as error:
             logger.error(
                 f"Failed to fetch missing skill map: {error}",
                 extra={"component": "DB", "event": "missing_skill_map_error",
@@ -464,7 +488,7 @@ class JobRepository:
                            "meta": {"run_id": run_id, "inserted": inserted}}
                 )
                 return inserted
-        except sqlite3.Error as e:
+        except Exception as e:
             logger.error(
                 f"[JOB_RUN] Failed to create run run_id={run_id}: {e}",
                 extra={"component": "DB", "event": "job_run_create_error",
@@ -515,7 +539,7 @@ class JobRepository:
                            "meta": {"run_id": run_id, "status": status}}
                 )
                 return True
-        except sqlite3.Error as e:
+        except Exception as e:
             logger.error(
                 f"[JOB_RUN] Failed to update run_id={run_id}: {e}",
                 extra={"component": "DB", "event": "job_run_update_error",
@@ -545,7 +569,7 @@ class JobRepository:
                     "completed_at": row[4],
                     "result_json": row[5],
                 }
-        except sqlite3.Error as e:
+        except Exception as e:
             logger.error(
                 f"[JOB_RUN] Failed to fetch run_id={run_id}: {e}",
                 extra={"component": "DB", "event": "job_run_fetch_error",

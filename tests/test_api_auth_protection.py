@@ -129,3 +129,12 @@ class TestProtectedEndpointsAuthEnabled:
             headers={"Authorization": f"Bearer {token}"}
         )
         assert response.status_code == 200
+
+    def test_authenticated_user_gets_404_for_unknown_run(self, client_auth_enabled):
+        secret = "test-secret-32-chars-long-enough!!"
+        token = _make_jwt(secret)
+        response = client_auth_enabled.get(
+            "/v1/runs/nonexistent-run-id",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 404
