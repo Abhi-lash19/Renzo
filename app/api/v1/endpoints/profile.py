@@ -87,6 +87,20 @@ async def upload_resume(
         experience_level=profile.get("experience_level", "0-2 years"),
     )
 
+    # Phase 5: generate and store profile embedding when enabled
+    from config import settings as _settings_module
+    if _settings_module.settings.EMBEDDINGS_ENABLED:
+        try:
+            from pipeline.embedder import build_profile_text, get_embedding_provider
+            provider = get_embedding_provider()
+            profile_text = build_profile_text(profile)
+            if profile_text:
+                profile_emb = provider.embed(profile_text)
+                repository.store_profile_embedding(user_id, profile_emb)
+                logger.info(f"[PROFILE] Stored embedding for user_id={user_id[:8]}...")
+        except Exception as e:
+            logger.warning(f"[PROFILE] Profile embedding failed (non-fatal): {e}")
+
     return _to_response(profile, source="upload")
 
 

@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1.endpoints import auth, feedback, health, jobs, profile
+from app.api.v1.endpoints import auth, feedback, health, jobs, jobs_search, profile
 from storage.db import init_db
 from storage.db_manager import db_manager
 
@@ -34,3 +34,4 @@ app.include_router(jobs.router, prefix="/v1", tags=["jobs"])
 app.include_router(feedback.router, prefix="/v1", tags=["feedback"])
 app.include_router(auth.router, prefix="/v1")
 app.include_router(profile.router, prefix="/v1")
+app.include_router(jobs_search.router, prefix="/v1")
