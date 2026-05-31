@@ -212,7 +212,8 @@ def enrich_jobs(jobs: List[Job], profile: dict) -> Tuple[List[Job], float]:
             )
 
             score = score_job(job, profile)
-            job.match_type = classify_job(score=job.score, transferable_count=0)
+            transferable_count = len(job.match_data.get("transferable_skills", []))
+            job.match_type = classify_job(score=job.score, transferable_count=transferable_count)
             logger.info(
                 f"[SCORER] job_id={getattr(job, 'job_id', 'unknown')} "
                 f"title={getattr(job, 'title', '')} "
