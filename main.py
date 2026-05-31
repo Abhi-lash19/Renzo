@@ -142,6 +142,11 @@ def main() -> None:
         metavar=("JOB_ID", "ACTION"),
         help="Record user feedback. ACTION must be: applied | ignored | viewed",
     )
+    parser.add_argument(
+        "--evaluate",
+        action="store_true",
+        help="Run the evaluation framework and save baseline metrics to evaluation/results/baseline.json",
+    )
     args = parser.parse_args()
 
     from storage.db_manager import db_manager
@@ -154,6 +159,14 @@ def main() -> None:
             success = repository.record_interaction(job_id, action)
             status = "OK" if success else "FAILED"
             print(f"[feedback] {job_id} -> {action}: {status}")
+            return
+
+        if args.evaluate:
+            from evaluation.run_eval import print_results, run_evaluation, save_baseline
+            print("Running Renzo evaluation framework...")
+            eval_results = run_evaluation()
+            print_results(eval_results)
+            save_baseline(eval_results)
             return
 
         # Default: run full pipeline (--run or no flag)
