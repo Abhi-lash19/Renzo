@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Set
 if TYPE_CHECKING:
     from pipeline.models import Job
 
-from intelligence.skill_adjacency import get_transferable_skills
+from intelligence.skill_adjacency import SKILL_GRAPH as _SKILL_GRAPH, get_transferable_skills
 from utils.logger import get_logger
 from utils.text_utils import contains_term, normalize_text
 
@@ -512,10 +512,21 @@ def build_match_data(job: "Job", profile: dict) -> dict:
         matched_skills_list = sorted(matched_skills)
         missing_skills = sorted(canonical_user_skills - matched_skills)
 
-        # Phase 6: find transferable skills (profile skills adjacent to missing job skills)
+        # Phase 6: find transferable skills — user skills that bridge actual job requirements.
+        # Step 1: collect all skills the SKILL_GRAPH knows about that appear in the job text
+        # Step 2: subtract skills the user already has → job-required skills the user lacks
+        # Step 3: find which user skills are adjacent to those gaps
+        _all_graph_skills: set = set(_SKILL_GRAPH.keys())
+        for _adjs in _SKILL_GRAPH.values():
+            _all_graph_skills.update(_adjs.keys())
+        _job_graph_skills = {
+            skill for skill in _all_graph_skills
+            if contains_term(job_text_normalized, skill)
+        }
+        _job_required_not_in_profile = sorted(_job_graph_skills - canonical_user_skills)
         _raw_transferable = get_transferable_skills(
-            profile_skills=matched_skills_list,
-            job_required_skills=missing_skills,
+            profile_skills=sorted(canonical_user_skills),
+            job_required_skills=_job_required_not_in_profile,
         )
         transferable_skills_data = [
             {"profile_skill": ps, "job_skill": js, "confidence": round(conf, 4)}

@@ -413,9 +413,14 @@ class TestTransferableSkillsInMatchData:
             posted_at=datetime.utcnow(), fetched_at=datetime.utcnow(),
         )
         match_data = build_match_data(job, self._make_profile(["fastapi"]))
-        if "flask" in match_data.get("missing_skills", []):
-            job_skills_bridged = [t["job_skill"] for t in match_data.get("transferable_skills", [])]
-            assert "flask" in job_skills_bridged
+        # With the fix: "flask" should appear as a job_skill in transferable_skills
+        # because fastapi→flask is in SKILL_GRAPH and flask appears in job text
+        job_skills_bridged = [t["job_skill"] for t in match_data.get("transferable_skills", [])]
+        assert "flask" in job_skills_bridged, (
+            f"Expected 'flask' in transferable job_skills, got: {job_skills_bridged}. "
+            f"missing_skills={match_data.get('missing_skills', [])}, "
+            f"transferable_skills={match_data.get('transferable_skills', [])}"
+        )
 
     def test_transferable_dicts_have_required_keys(self):
         from pipeline.models import Job

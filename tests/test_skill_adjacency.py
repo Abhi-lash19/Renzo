@@ -144,3 +144,9 @@ class TestGetTransferableSkills:
     def test_kubernetes_ecs_transferable(self):
         result = get_transferable_skills(["kubernetes"], ["ecs"])
         assert len(result) >= 1
+
+    def test_self_transfer_not_possible(self):
+        """Skill X in both profile and job returns empty (no self-loops in graph)."""
+        result = get_transferable_skills(["fastapi"], ["fastapi"])
+        # Since there are no self-loops, fastapi cannot "transfer to" fastapi
+        assert result == []

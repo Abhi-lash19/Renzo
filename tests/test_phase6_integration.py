@@ -48,8 +48,13 @@ class TestTransferableSkillsEndToEnd:
         assert "transferable_skills" in match_data
         transferable_pairs = [(t["profile_skill"], t["job_skill"])
                               for t in match_data["transferable_skills"]]
-        if "flask" in match_data.get("missing_skills", []):
-            assert ("fastapi", "flask") in transferable_pairs
+        # With the fix: flask is in the job text and in SKILL_GRAPH, and fastapi→flask
+        # is a known adjacency, so the transfer should always be detected regardless
+        # of whether flask appears in missing_skills.
+        assert ("fastapi", "flask") in transferable_pairs, (
+            f"Expected ('fastapi', 'flask') in transferable_pairs, got: {transferable_pairs}. "
+            f"missing_skills={match_data.get('missing_skills', [])}"
+        )
 
     def test_transferable_count_is_int(self):
         job = _make_job("e2e_002", "Flask Dev",
@@ -65,8 +70,12 @@ class TestTransferableSkillsEndToEnd:
         match_data = build_match_data(job, profile)
         transferable_pairs = [(t["profile_skill"], t["job_skill"])
                               for t in match_data.get("transferable_skills", [])]
-        if "gcp" in match_data.get("missing_skills", []):
-            assert ("aws", "gcp") in transferable_pairs
+        # With the fix: gcp is in the job text and in SKILL_GRAPH, and aws→gcp is
+        # a known adjacency, so the transfer should always be detected.
+        assert ("aws", "gcp") in transferable_pairs, (
+            f"Expected ('aws', 'gcp') in transferable_pairs, got: {transferable_pairs}. "
+            f"missing_skills={match_data.get('missing_skills', [])}"
+        )
 
     def test_no_adjacent_gives_zero_transferable(self):
         job = _make_job("e2e_004", "Data Scientist",

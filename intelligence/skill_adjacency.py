@@ -26,7 +26,7 @@ SKILL_GRAPH: dict[str, dict[str, float]] = {
     "express": {"nestjs": 0.8, "fastapi": 0.55, "flask": 0.55, "nodejs": 0.9},
     "nestjs": {"express": 0.8, "fastapi": 0.5, "nodejs": 0.9, "typescript": 0.85},
     # ── Languages ────────────────────────────────────────────────────────────
-    "python": {"golang": 0.5, "ruby": 0.45},
+    "python": {"golang": 0.5},
     "golang": {"python": 0.5, "rust": 0.5},
     "nodejs": {"express": 0.92, "nestjs": 0.85, "typescript": 0.85, "javascript": 0.95},
     "typescript": {"javascript": 0.95, "nodejs": 0.8},
