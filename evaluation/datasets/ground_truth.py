@@ -57,8 +57,8 @@ GROUND_TRUTH: dict = {
     "fullstack-developer": {
         "eval_job_j001": 1,  # Python Backend — backend part relevant, missing frontend
         "eval_job_j002": 1,  # Backend FastAPI — backend relevant only
-        "eval_job_j003": 0,  # Backend — too backend-only, no frontend
-        "eval_job_j004": 0,  # API Engineer — too backend-only
+        "eval_job_j003": 1,  # Software Engineer Backend — Python backend relevant (was 0)
+        "eval_job_j004": 1,  # API Engineer — FastAPI + PostgreSQL, backend relevant (was 0)
         "eval_job_j005": 0,  # Python Microservices — missing frontend
         "eval_job_j006": 0,  # Flask Backend — missing frontend component
         "eval_job_j007": 0,  # Django REST — missing frontend

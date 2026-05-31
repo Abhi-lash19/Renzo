@@ -86,6 +86,7 @@ class EvaluationHarness:
         profile: dict,
         jobs: "List[Job]",
         graded_relevance: Dict[str, int],
+        profile_id: str | None = None,
     ) -> EvalResult:
         """
         Score and rank all jobs, then compute metrics against ground truth.
@@ -94,11 +95,12 @@ class EvaluationHarness:
             profile:          Profile dict (same format as load_profile() output).
             jobs:             List of Job objects to score.
             graded_relevance: Ground truth {job_id: 0/1/2}.
+            profile_id:       Optional explicit profile ID; falls back to profile["name"].
 
         Returns:
             EvalResult with ranked job IDs, scores, match types, and metrics.
         """
-        profile_id = profile.get("name", "unknown")
+        profile_id = profile_id or profile.get("name", "unknown")
         ranked = self.score_and_rank(profile, jobs)
         ranked_ids = [j.job_id for j in ranked]
         ranked_scores = [j.score for j in ranked]
@@ -132,8 +134,7 @@ class EvaluationHarness:
 
         for profile_id, profile in GOLDEN_PROFILES.items():
             relevance = GROUND_TRUTH.get(profile_id, {})
-            result = self.evaluate_single(profile, all_jobs, relevance)
-            result.profile_id = profile_id
+            result = self.evaluate_single(profile, all_jobs, relevance, profile_id=profile_id)
             results[profile_id] = result
 
         return results

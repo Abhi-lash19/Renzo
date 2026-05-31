@@ -27,6 +27,7 @@ METRIC_TARGETS = {
     "precision_at_5": 0.80,
     "precision_at_10": 0.75,
     "recall_at_10": 0.70,
+    "ndcg_at_5": 0.75,
     "ndcg_at_10": 0.70,
     "mrr": 0.80,
 }
