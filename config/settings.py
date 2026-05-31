@@ -52,6 +52,14 @@ class Settings:
     # DB backend alias (mirrors DB_TYPE for clarity in Phase 3+)
     DB_BACKEND = os.getenv("DB_BACKEND", os.getenv("DB_TYPE", "sqlite")).lower()
 
+    # Embeddings / Hybrid Retrieval
+    EMBEDDINGS_ENABLED = os.getenv("EMBEDDINGS_ENABLED", "false").lower() == "true"
+    EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5")
+    EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "bge")  # "bge" | "mock"
+    RETRIEVAL_KEYWORD_WEIGHT = float(os.getenv("RETRIEVAL_KEYWORD_WEIGHT", "0.60"))
+    RETRIEVAL_VECTOR_WEIGHT = float(os.getenv("RETRIEVAL_VECTOR_WEIGHT", "0.40"))
+    EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
+
 
 settings = Settings()
 
