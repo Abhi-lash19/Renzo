@@ -40,6 +40,8 @@ def apply_migrations(conn):
         ("jobs", "updated_at", "DATETIME"),
         ("jobs", "raw_json", "TEXT"),
         ("jobs", "match_type", "TEXT DEFAULT ''"),
+        ("jobs", "embedding_json", "TEXT"),                    # Phase 5: SQLite embedding blob
+        ("user_profiles", "profile_embedding_json", "TEXT"),   # Phase 5: profile embedding blob
     ]
 
     for table, col_name, col_type in columns_to_add:

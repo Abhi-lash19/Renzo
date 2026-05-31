@@ -709,3 +709,156 @@ class JobRepository:
                        "meta": {"user_id": user_id[:8], "error": str(e)}}
             )
             return None
+
+    # -----------------------------------------------------------------------
+    # Job embedding storage (Phase 5)
+    # -----------------------------------------------------------------------
+
+    def store_job_embedding(self, job_id: str, embedding: list) -> bool:
+        """Store a job embedding. SQLite: JSON blob. Postgres: VECTOR type."""
+        import json as _json
+        from config.settings import settings as _settings
+
+        is_postgres = _settings.DB_BACKEND == "postgres"
+        if is_postgres:
+            vec_str = "[" + ",".join(f"{v:.8f}" for v in embedding) + "]"
+            query = "UPDATE jobs SET embedding = ?::vector WHERE id = ?"
+            params = (vec_str, job_id)
+        else:
+            query = "UPDATE jobs SET embedding_json = ? WHERE id = ?"
+            params = (_json.dumps(embedding), job_id)
+
+        try:
+            with db_manager.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, params)
+                conn.commit()
+                logger.debug(
+                    f"[EMBEDDER] Stored embedding for job_id={job_id}",
+                    extra={"component": "EMBEDDER", "event": "job_embedding_stored",
+                           "meta": {"job_id": job_id}}
+                )
+                return True
+        except Exception as e:
+            logger.error(
+                f"[EMBEDDER] Failed to store embedding for job_id={job_id}: {e}",
+                extra={"component": "EMBEDDER", "event": "job_embedding_error",
+                       "meta": {"job_id": job_id, "error": str(e)}}
+            )
+            return False
+
+    def get_job_embedding(self, job_id: str) -> list | None:
+        """Fetch stored embedding for a job. Returns None if not found."""
+        import json as _json
+        from config.settings import settings as _settings
+
+        is_postgres = _settings.DB_BACKEND == "postgres"
+        col = "embedding" if is_postgres else "embedding_json"
+        query = f"SELECT {col} FROM jobs WHERE id = ? LIMIT 1"
+
+        try:
+            with db_manager.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, (job_id,))
+                row = cursor.fetchone()
+                if not row or row[0] is None:
+                    return None
+                raw = row[0]
+                if is_postgres:
+                    return list(raw) if not isinstance(raw, list) else raw
+                return _json.loads(raw)
+        except Exception as e:
+            logger.error(
+                f"[EMBEDDER] Failed to get embedding for job_id={job_id}: {e}",
+                extra={"component": "EMBEDDER", "event": "job_embedding_fetch_error",
+                       "meta": {"job_id": job_id, "error": str(e)}}
+            )
+            return None
+
+    def get_jobs_without_embeddings(self, limit: int = 100) -> list:
+        """Return list of job_ids that have no stored embedding."""
+        from config.settings import settings as _settings
+
+        is_postgres = _settings.DB_BACKEND == "postgres"
+        if is_postgres:
+            query = "SELECT id FROM jobs WHERE embedding IS NULL LIMIT ?"
+        else:
+            query = "SELECT id FROM jobs WHERE embedding_json IS NULL LIMIT ?"
+
+        try:
+            with db_manager.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, (limit,))
+                return [row[0] for row in cursor.fetchall() if row[0]]
+        except Exception as e:
+            logger.error(
+                f"[EMBEDDER] Failed to get un-embedded jobs: {e}",
+                extra={"component": "EMBEDDER", "event": "jobs_without_embeddings_error",
+                       "meta": {"error": str(e)}}
+            )
+            return []
+
+    # -----------------------------------------------------------------------
+    # Profile embedding storage (Phase 5)
+    # -----------------------------------------------------------------------
+
+    def store_profile_embedding(self, user_id: str, embedding: list) -> bool:
+        """Store the embedding for a user's profile."""
+        import json as _json
+        from config.settings import settings as _settings
+
+        is_postgres = _settings.DB_BACKEND == "postgres"
+        if is_postgres:
+            vec_str = "[" + ",".join(f"{v:.8f}" for v in embedding) + "]"
+            query = "UPDATE user_profiles SET profile_embedding = ?::vector WHERE user_id = ?"
+            params = (vec_str, user_id)
+        else:
+            query = "UPDATE user_profiles SET profile_embedding_json = ? WHERE user_id = ?"
+            params = (_json.dumps(embedding), user_id)
+
+        try:
+            with db_manager.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, params)
+                conn.commit()
+                logger.debug(
+                    f"[EMBEDDER] Stored profile embedding for user_id={user_id[:8]}...",
+                    extra={"component": "EMBEDDER", "event": "profile_embedding_stored",
+                           "meta": {"user_id": user_id[:8]}}
+                )
+                return True
+        except Exception as e:
+            logger.error(
+                f"[EMBEDDER] Failed to store profile embedding: {e}",
+                extra={"component": "EMBEDDER", "event": "profile_embedding_error",
+                       "meta": {"user_id": user_id[:8] if user_id else "?", "error": str(e)}}
+            )
+            return False
+
+    def get_profile_embedding(self, user_id: str) -> list | None:
+        """Fetch stored profile embedding. Returns None if not found."""
+        import json as _json
+        from config.settings import settings as _settings
+
+        is_postgres = _settings.DB_BACKEND == "postgres"
+        col = "profile_embedding" if is_postgres else "profile_embedding_json"
+        query = f"SELECT {col} FROM user_profiles WHERE user_id = ? LIMIT 1"
+
+        try:
+            with db_manager.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, (user_id,))
+                row = cursor.fetchone()
+                if not row or row[0] is None:
+                    return None
+                raw = row[0]
+                if is_postgres:
+                    return list(raw) if not isinstance(raw, list) else raw
+                return _json.loads(raw)
+        except Exception as e:
+            logger.error(
+                f"[EMBEDDER] Failed to get profile embedding: {e}",
+                extra={"component": "EMBEDDER", "event": "profile_embedding_fetch_error",
+                       "meta": {"user_id": user_id[:8] if user_id else "?", "error": str(e)}}
+            )
+            return None
