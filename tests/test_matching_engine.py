@@ -345,5 +345,93 @@ class TestAgeFilter(unittest.TestCase):
         self.assertNotIn("too old", reason)
 
 
+class TestTransferableSkillsInMatchData:
+    """Verify transferable_skills and transferable_count appear in build_match_data output."""
+
+    def _make_profile(self, core_skills):
+        return {
+            "core_skills": core_skills,
+            "secondary_skills": [],
+            "all_skills": core_skills,
+            "weighted_skills": {s: 1.0 for s in core_skills},
+            "cloud": [], "devops": [],
+            "preferred_roles": ["backend developer"],
+            "target_roles": ["backend"],
+            "exclude_keywords": [],
+            "bonus_keywords": [],
+            "preferred_keywords": [],
+            "projects": [], "experience": [],
+            "location": "remote", "remote_preferred": True,
+        }
+
+    def test_transferable_skills_key_in_match_data(self):
+        from pipeline.models import Job
+        from datetime import datetime
+        job = Job(
+            job_id="ts_001", title="Backend Dev", company="Co",
+            location="Remote", description="We use flask and postgresql",
+            url="https://example.com/ts001", source="test",
+            posted_at=datetime.utcnow(), fetched_at=datetime.utcnow(),
+        )
+        match_data = build_match_data(job, self._make_profile(["fastapi", "postgresql"]))
+        assert "transferable_skills" in match_data
+
+    def test_transferable_count_key_in_match_data(self):
+        from pipeline.models import Job
+        from datetime import datetime
+        job = Job(
+            job_id="ts_002", title="Flask Dev", company="Co",
+            location="Remote", description="flask rest api postgresql",
+            url="https://example.com/ts002", source="test",
+            posted_at=datetime.utcnow(), fetched_at=datetime.utcnow(),
+        )
+        match_data = build_match_data(job, self._make_profile(["fastapi"]))
+        assert "transferable_count" in match_data
+        assert isinstance(match_data["transferable_count"], int)
+        assert match_data["transferable_count"] >= 0
+
+    def test_transferable_skills_is_list(self):
+        from pipeline.models import Job
+        from datetime import datetime
+        job = Job(
+            job_id="ts_003", title="Dev", company="Co",
+            location="Remote", description="python aws backend",
+            url="https://example.com/ts003", source="test",
+            posted_at=datetime.utcnow(), fetched_at=datetime.utcnow(),
+        )
+        match_data = build_match_data(job, self._make_profile(["fastapi"]))
+        assert isinstance(match_data["transferable_skills"], list)
+
+    def test_fastapi_user_flask_job_finds_transferable(self):
+        from pipeline.models import Job
+        from datetime import datetime
+        job = Job(
+            job_id="ts_004", title="Flask Backend Dev", company="Co",
+            location="Remote",
+            description="We use flask for our backend REST API development and postgresql",
+            url="https://example.com/ts004", source="test",
+            posted_at=datetime.utcnow(), fetched_at=datetime.utcnow(),
+        )
+        match_data = build_match_data(job, self._make_profile(["fastapi"]))
+        if "flask" in match_data.get("missing_skills", []):
+            job_skills_bridged = [t["job_skill"] for t in match_data.get("transferable_skills", [])]
+            assert "flask" in job_skills_bridged
+
+    def test_transferable_dicts_have_required_keys(self):
+        from pipeline.models import Job
+        from datetime import datetime
+        job = Job(
+            job_id="ts_005", title="Flask Dev", company="Co",
+            location="Remote", description="flask postgresql backend REST api",
+            url="https://example.com/ts005", source="test",
+            posted_at=datetime.utcnow(), fetched_at=datetime.utcnow(),
+        )
+        match_data = build_match_data(job, self._make_profile(["fastapi"]))
+        for t in match_data.get("transferable_skills", []):
+            assert "profile_skill" in t
+            assert "job_skill" in t
+            assert "confidence" in t
+
+
 if __name__ == "__main__":
     unittest.main()

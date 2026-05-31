@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Set
 if TYPE_CHECKING:
     from pipeline.models import Job
 
+from intelligence.skill_adjacency import get_transferable_skills
 from utils.logger import get_logger
 from utils.text_utils import contains_term, normalize_text
 
@@ -510,6 +511,17 @@ def build_match_data(job: "Job", profile: dict) -> dict:
 
         matched_skills_list = sorted(matched_skills)
         missing_skills = sorted(canonical_user_skills - matched_skills)
+
+        # Phase 6: find transferable skills (profile skills adjacent to missing job skills)
+        _raw_transferable = get_transferable_skills(
+            profile_skills=matched_skills_list,
+            job_required_skills=missing_skills,
+        )
+        transferable_skills_data = [
+            {"profile_skill": ps, "job_skill": js, "confidence": round(conf, 4)}
+            for ps, js, conf in _raw_transferable
+        ]
+
         skill_score_raw = round(
             sum(weight_lookup.get(skill, DEFAULT_SKILL_WEIGHT) for skill in matched_skills_list),
             4,
@@ -554,6 +566,8 @@ def build_match_data(job: "Job", profile: dict) -> dict:
         match_data = {
             "matched_skills": matched_skills_list,
             "missing_skills": missing_skills,
+            "transferable_skills": transferable_skills_data,
+            "transferable_count": len(transferable_skills_data),
             "skill_score_raw": skill_score_raw,
             "skill_overlap": skill_overlap,
             "role_match_score": round(role_match_score, 4),
