@@ -284,6 +284,99 @@ def generate_intelligence(jobs: List[Job], repository: JobRepository, profile: d
 
 
 # ---------------------------------------------------------------------------
+# Phase 5: Embedding stage
+# ---------------------------------------------------------------------------
+
+def _fetch_jobs_for_embedding(job_ids: List[str]) -> Dict[str, str]:
+    """
+    Fetch title + company + description for the given job_ids.
+    Returns {job_id: embedding_text} for use by embed_jobs().
+    """
+    if not job_ids:
+        return {}
+
+    from pipeline.embedder import build_job_text
+    from storage.db_manager import db_manager
+
+    placeholders = ",".join("?" for _ in job_ids)
+    query = f"SELECT id, title, company, description FROM jobs WHERE id IN ({placeholders})"
+
+    try:
+        with db_manager.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, tuple(job_ids))
+            rows = cursor.fetchall()
+    except Exception as e:
+        logger.error(f"[EMBED_STAGE] Failed to fetch job data for embedding: {e}")
+        return {}
+
+    result: Dict[str, str] = {}
+    for row in rows:
+        job_id, title, company, description = row
+
+        class _Proxy:
+            pass
+
+        proxy = _Proxy()
+        proxy.title = title or ""
+        proxy.company = company or ""
+        proxy.description = description or ""
+        result[job_id] = build_job_text(proxy)
+
+    return result
+
+
+def embed_jobs(
+    job_ids: List[str],
+    repository: JobRepository,
+    provider,
+    batch_size: int | None = None,
+) -> int:
+    """
+    Generate and store embeddings for the given job_ids.
+    Called after store_jobs() when EMBEDDINGS_ENABLED=true.
+
+    Returns the count of successfully stored embeddings.
+    Failures are logged but never propagated — the stage is non-fatal.
+    """
+    if not job_ids:
+        return 0
+
+    _batch_size = batch_size or settings.EMBEDDING_BATCH_SIZE
+    job_texts = _fetch_jobs_for_embedding(job_ids)
+    if not job_texts:
+        logger.warning("[EMBED_STAGE] No job texts fetched for embedding")
+        return 0
+
+    ids_ordered = list(job_texts.keys())
+    texts_ordered = [job_texts[jid] for jid in ids_ordered]
+    stored_count = 0
+
+    for batch_start in range(0, len(ids_ordered), _batch_size):
+        batch_ids = ids_ordered[batch_start: batch_start + _batch_size]
+        batch_texts = texts_ordered[batch_start: batch_start + _batch_size]
+        try:
+            embeddings = provider.embed_batch(batch_texts)
+        except Exception as e:
+            logger.error(
+                f"[EMBED_STAGE] embed_batch failed at offset {batch_start}: {e}",
+                extra={"component": "EMBED_STAGE", "event": "batch_error",
+                       "meta": {"offset": batch_start, "error": str(e)}}
+            )
+            continue
+        for job_id, embedding in zip(batch_ids, embeddings):
+            if repository.store_job_embedding(job_id, embedding):
+                stored_count += 1
+
+    logger.info(
+        f"[EMBED_STAGE] Embedded {stored_count}/{len(job_ids)} jobs",
+        extra={"component": "EMBED_STAGE", "event": "embed_complete",
+               "meta": {"total": len(job_ids), "stored": stored_count}}
+    )
+    return stored_count
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator entry point
 # ---------------------------------------------------------------------------
 
@@ -335,6 +428,18 @@ def process_jobs(jobs: List[Job], repository: JobRepository, profile: dict) -> i
         t = time.perf_counter()
         refresh_learning_preferences(repository, profile)
         _stage_log("LEARNING_UPDATE_TIME", t, "refreshed learning state")
+
+        # Phase 5: generate embeddings when enabled (non-fatal)
+        if settings.EMBEDDINGS_ENABLED and stored_jobs:
+            try:
+                from pipeline.embedder import get_embedding_provider
+                t = time.perf_counter()
+                provider = get_embedding_provider()
+                newly_stored_ids = [j.job_id for j in stored_jobs]
+                embed_jobs(newly_stored_ids, repository, provider)
+                _stage_log("EMBED_TIME", t, f"embedded {len(newly_stored_ids)} new jobs")
+            except Exception as e:
+                logger.error(f"[EMBED_STAGE] Embedding stage failed (non-fatal): {e}")
 
         logger.info(
             f"[PIPELINE_SUMMARY] fetched={total_fetched} relevant={len(filtered_jobs)} "
