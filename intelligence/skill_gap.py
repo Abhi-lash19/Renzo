@@ -25,12 +25,14 @@ def compute_skill_gap(job, profile: Dict[str, Any]) -> Dict[str, List[str]]:
             job.detected_skills = list(job.skills)
             job.missing_skills = sorted(set(getattr(job, "missing_skills", []) or []))
 
+        transferable = match_data.get("transferable_skills", []) if match_data else []
         return {
             "matched_skills": job.skills,
             "missing_skills": job.missing_skills,
+            "transferable_skills": transferable,
         }
     except Exception as e:
         logger.exception(f"Error computing gap: {e}")
         job.skills = []
         job.missing_skills = []
-        return {"matched_skills": [], "missing_skills": []}
+        return {"matched_skills": [], "missing_skills": [], "transferable_skills": []}
