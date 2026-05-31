@@ -134,3 +134,87 @@ class TestRetrieveKeywordOnly:
         init_db()
         repo = JobRepository()
         assert retrieve_keyword_only(repo, limit=10) == []
+
+
+class TestRetrieveHybridSQLite:
+    """End-to-end test of the SQLite Python-side cosine path in retrieve_hybrid()."""
+
+    @pytest.fixture
+    def repo_with_embedded_jobs(self, tmp_path, monkeypatch):
+        import storage.db as db_module
+        import storage.db_manager as dm
+        db_file = tmp_path / "test_hybrid_retrieval.db"
+        monkeypatch.setattr(db_module, "DB_PATH", db_file)
+        monkeypatch.setattr(dm, "DB_PATH", str(db_file))
+        dm.db_manager._sqlite_conn = None
+        dm.db_manager._initialized = False
+        from storage.db import init_db
+        from storage.repository import JobRepository
+        from pipeline.models import Job
+        from pipeline.embedder import MockEmbeddingProvider
+        from datetime import datetime
+
+        init_db()
+        repo = JobRepository()
+        provider = MockEmbeddingProvider()
+
+        jobs_data = [
+            ("job_hyb_001", "Python Backend Engineer", "TechCo", "Python FastAPI AWS Docker"),
+            ("job_hyb_002", "Frontend React Developer", "WebCo", "React JavaScript CSS UI"),
+            ("job_hyb_003", "DevOps Engineer", "CloudCo", "Kubernetes Terraform AWS Docker"),
+        ]
+        for job_id, title, company, description in jobs_data:
+            job = Job(
+                job_id=job_id, title=title, company=company,
+                location="Remote", description=description,
+                url=f"https://example.com/{job_id}", source="test",
+                posted_at=datetime.utcnow(), fetched_at=datetime.utcnow(),
+            )
+            job.score = 7.0 if "Python" in description else 5.0
+            repo.insert_job(job)
+            # Store embedding for this job
+            job_text = f"{title} at {company}. {description}"
+            emb = provider.embed(job_text)
+            repo.store_job_embedding(job_id, emb)
+
+        return repo, provider
+
+    def test_retrieve_hybrid_returns_list(self, repo_with_embedded_jobs):
+        repo, provider = repo_with_embedded_jobs
+        profile_emb = provider.embed("Python developer AWS backend FastAPI")
+        results = retrieve_hybrid(profile_emb, repo, limit=10)
+        assert isinstance(results, list)
+
+    def test_retrieve_hybrid_returns_retrieval_results(self, repo_with_embedded_jobs):
+        from pipeline.retriever import RetrievalResult
+        repo, provider = repo_with_embedded_jobs
+        profile_emb = provider.embed("Python developer AWS backend FastAPI")
+        results = retrieve_hybrid(profile_emb, repo, limit=10)
+        assert len(results) > 0
+        assert all(isinstance(r, RetrievalResult) for r in results)
+
+    def test_retrieve_hybrid_returns_nonzero_fused_scores(self, repo_with_embedded_jobs):
+        repo, provider = repo_with_embedded_jobs
+        profile_emb = provider.embed("Python developer AWS backend FastAPI")
+        results = retrieve_hybrid(profile_emb, repo, limit=10)
+        assert all(r.fused_score > 0.0 for r in results)
+
+    def test_retrieve_hybrid_fused_scores_in_range(self, repo_with_embedded_jobs):
+        repo, provider = repo_with_embedded_jobs
+        profile_emb = provider.embed("Python developer AWS backend FastAPI")
+        results = retrieve_hybrid(profile_emb, repo, limit=10)
+        for r in results:
+            assert 0.0 <= r.fused_score <= 1.0, f"Out of range: {r.job_id} fused={r.fused_score}"
+
+    def test_retrieve_hybrid_sorted_by_fused_score(self, repo_with_embedded_jobs):
+        repo, provider = repo_with_embedded_jobs
+        profile_emb = provider.embed("Python developer AWS backend FastAPI")
+        results = retrieve_hybrid(profile_emb, repo, limit=10)
+        scores = [r.fused_score for r in results]
+        assert scores == sorted(scores, reverse=True)
+
+    def test_retrieve_hybrid_empty_profile_fallback(self, repo_with_embedded_jobs):
+        repo, _ = repo_with_embedded_jobs
+        # Empty profile embedding → fallback to keyword-only
+        results = retrieve_hybrid([], repo, limit=10)
+        assert isinstance(results, list)

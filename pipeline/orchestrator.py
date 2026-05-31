@@ -15,6 +15,7 @@ Entry point: process_jobs(jobs, repository, profile) -> int (count stored)
 """
 
 import time
+import types
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Tuple
 
@@ -314,13 +315,11 @@ def _fetch_jobs_for_embedding(job_ids: List[str]) -> Dict[str, str]:
     for row in rows:
         job_id, title, company, description = row
 
-        class _Proxy:
-            pass
-
-        proxy = _Proxy()
-        proxy.title = title or ""
-        proxy.company = company or ""
-        proxy.description = description or ""
+        proxy = types.SimpleNamespace(
+            title=title or "",
+            company=company or "",
+            description=description or "",
+        )
         result[job_id] = build_job_text(proxy)
 
     return result

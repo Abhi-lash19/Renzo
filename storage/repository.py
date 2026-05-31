@@ -733,6 +733,13 @@ class JobRepository:
                 cursor = conn.cursor()
                 cursor.execute(query, params)
                 conn.commit()
+                if cursor.rowcount == 0:
+                    logger.debug(
+                        f"[EMBEDDER] No job found for embedding job_id={job_id} (UPDATE affected 0 rows)",
+                        extra={"component": "EMBEDDER", "event": "job_embedding_not_found",
+                               "meta": {"job_id": job_id}}
+                    )
+                    return False
                 logger.debug(
                     f"[EMBEDDER] Stored embedding for job_id={job_id}",
                     extra={"component": "EMBEDDER", "event": "job_embedding_stored",
@@ -821,6 +828,13 @@ class JobRepository:
                 cursor = conn.cursor()
                 cursor.execute(query, params)
                 conn.commit()
+                if cursor.rowcount == 0:
+                    logger.debug(
+                        f"[EMBEDDER] No profile found for user_id={user_id[:8]}... (UPDATE affected 0 rows)",
+                        extra={"component": "EMBEDDER", "event": "profile_embedding_not_found",
+                               "meta": {"user_id": user_id[:8]}}
+                    )
+                    return False
                 logger.debug(
                     f"[EMBEDDER] Stored profile embedding for user_id={user_id[:8]}...",
                     extra={"component": "EMBEDDER", "event": "profile_embedding_stored",
